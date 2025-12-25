@@ -4,6 +4,7 @@ library(duckdb)
 
 DATA <- NULL
 
+# ---- Load data once at startup ----
 load_data <- function() {
   tryCatch({
     token <- Sys.getenv("MOTHERDUCK_TOKEN")
@@ -18,7 +19,7 @@ load_data <- function() {
     dbDisconnect(con, shutdown = TRUE)
     
     df <- as.data.frame(df)
-    message("Loaded ", nrow(df), " rows from MotherDuck")
+    message("✅ Loaded ", nrow(df), " rows from MotherDuck")
     
     df
   }, error = function(e) {
@@ -27,7 +28,24 @@ load_data <- function() {
   })
 }
 
+# 👇 force into global env
 DATA <<- load_data()
+
+# ---- CORS (for Squarespace later) ----
+#* @filter cors
+function(req, res) {
+  res$setHeader("Access-Control-Allow-Origin", "*")
+  res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+  res$setHeader("Access-Control-Allow-Headers", "Content-Type")
+  
+  if (req$REQUEST_METHOD == "OPTIONS") {
+    res$status <- 200
+    return(list())
+  } else {
+    plumber::forward()
+  }
+}
+
 # ---- Serve frontend ----
 #* @get /
 #* @serializer html
@@ -40,9 +58,9 @@ function() {
 function() {
   list(
     status = "ok",
-    class = class(DATA),
-    rows = if (is.data.frame(DATA)) nrow(DATA) else NA,
-    cols = if (is.data.frame(DATA)) ncol(DATA) else NA
+    class  = class(DATA),
+    rows   = if (is.data.frame(DATA)) nrow(DATA) else NULL,
+    cols   = if (is.data.frame(DATA)) ncol(DATA) else NULL
   )
 }
 
@@ -51,7 +69,6 @@ function() {
 #* @param name
 #* @param admission
 #* @param school
-#* @get /search
 function(name = "", admission = "", school = "Janakpuri", res) {
   
   if (!is.data.frame(DATA) || nrow(DATA) == 0) {
@@ -68,7 +85,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     return(list(error = "Enter at least 3 characters for Name and Admission"))
   }
   
-  nm <- tolower(name)
+  nm  <- tolower(name)
   adm <- tolower(admission)
   sch <- tolower(school)
   
@@ -84,4 +101,4 @@ function(name = "", admission = "", school = "Janakpuri", res) {
   df <- DATA[m1 & m2 & m3, ]
   
   head(df, 50)
-} 
+}
