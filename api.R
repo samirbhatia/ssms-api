@@ -15,8 +15,6 @@ prune_cache <- function() {
   }
 }
 
-assign(key, list(time = now, data = df), envir = .cache)
-prune_cache()
 
 #* @get /
 #* @serializer html
@@ -75,6 +73,9 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     res$status <- 400
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
+  
+  assign(key, list(time = now, data = df), envir = .cache)
+  prune_cache()
   
   # ---- Cache key ----
   key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
