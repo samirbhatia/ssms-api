@@ -4,24 +4,30 @@ library(duckdb)
 
 DATA <- NULL
 
-# ---- Load data ONCE at startup ----
 load_data <- function() {
-  con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-  dbExecute(con, "INSTALL motherduck;")
-  dbExecute(con, "LOAD motherduck;")
-  dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
-  
-  df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
-  dbDisconnect(con, shutdown = TRUE)
-  
-  df <- as.data.frame(df)
-  
-  message("Loaded ", nrow(df), " rows into memory")
-  df
+  tryCatch({
+    token <- Sys.getenv("MOTHERDUCK_TOKEN")
+    if (token == "") stop("MOTHERDUCK_TOKEN not set")
+    
+    con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+    dbExecute(con, "INSTALL motherduck;")
+    dbExecute(con, "LOAD motherduck;")
+    dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
+    
+    df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
+    dbDisconnect(con, shutdown = TRUE)
+    
+    df <- as.data.frame(df)
+    message("Loaded ", nrow(df), " rows from MotherDuck")
+    
+    df
+  }, error = function(e) {
+    message("❌ load_data failed: ", e$message)
+    NULL
+  })
 }
 
 DATA <<- load_data()
-
 # ---- Serve frontend ----
 #* @get /
 #* @serializer html
