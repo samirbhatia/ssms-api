@@ -62,7 +62,6 @@ function() {
 #* @param name Student name (min 3 chars)
 #* @param admission Admission number (min 3 chars)
 #* @param school School/branch name
-#* @serializer json
 function(name = "", admission = "", school = "Janakpuri", res) {
   
   name <- trimws(name)
@@ -74,14 +73,11 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
   
-  assign(key, list(time = now, data = df), envir = .cache)
-  prune_cache()
-  
-  # ---- Cache key ----
+  # ---- Build cache key FIRST ----
   key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
   now <- Sys.time()
   
-  # ---- Return cached result if fresh ----
+  # ---- Cache lookup ----
   if (exists(key, envir = .cache)) {
     entry <- get(key, envir = .cache)
     if (difftime(now, entry$time, units = "secs") < CACHE_TTL) {
@@ -124,7 +120,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     )
   )
   
-  # ---- Store in cache ----
+  # ---- Store in cache AFTER query ----
   assign(key, list(time = now, data = df), envir = .cache)
   
   df
