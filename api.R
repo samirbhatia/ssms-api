@@ -3,17 +3,9 @@ library(DBI)
 library(duckdb)
 
 # ---- Simple in-memory cache ----
+# ---- Simple in-memory cache ----
 .cache <- new.env(parent = emptyenv())
-CACHE_TTL <- 900  # seconds = 
-
-MAX_CACHE_KEYS <- 500
-
-prune_cache <- function() {
-  keys <- ls(.cache)
-  if (length(keys) > MAX_CACHE_KEYS) {
-    rm(list = keys[1:100], envir = .cache)
-  }
-}
+CACHE_TTL <- 300  # 5 minutes
 
 
 #* @get /
@@ -73,19 +65,16 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
   
-  # ---- Cache key ----
-  key <- paste(
-    tolower(school),
-    tolower(name),
-    tolower(admission),
-    sep = "|"
-  )
+  # ---- Build cache key FIRST ----
+  key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
   now <- Sys.time()
   
-  # ---- Return cached result if fresh ----
+  # ---- Check cache ----
   if (exists(key, envir = .cache)) {
     entry <- get(key, envir = .cache)
-    if (difftime(now, entry$time, units = "secs") < CACHE_TTL) {
+    age <- as.numeric(difftime(now, entry$time, units = "secs"))
+    
+    if (age < CACHE_TTL) {
       message("Cache hit: ", key)
       return(entry$data)
     } else {
