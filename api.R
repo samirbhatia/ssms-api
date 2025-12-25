@@ -18,7 +18,6 @@ prune_cache <- function() {
 assign(key, list(time = now, data = df), envir = .cache)
 prune_cache()
 
-
 #* @get /
 #* @serializer html
 function() {
