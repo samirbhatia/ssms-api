@@ -2,6 +2,9 @@ library(plumber)
 library(DBI)
 library(duckdb)
 
+# ---- Simple in-memory cache ----
+.cache <- new.env(parent = emptyenv())
+CACHE_TTL <- 90000  # seconds = 
 
 #* @get /
 #* @serializer html
@@ -50,7 +53,8 @@ function() {
 #* @param admission Admission number (min 3 chars)
 #* @param school School/branch name
 #* #* @serializer json
-function(name = "", admission = "", school = "Janakpuri") {
+
+function(name = "", admission = "", school = "Janakpuri", res) {
   
   name <- trimws(name)
   admission <- trimws(admission)
@@ -61,19 +65,36 @@ function(name = "", admission = "", school = "Janakpuri") {
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
   
+  # ---- Cache key ----
+  key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
+  now <- Sys.time()
+  
+  # ---- Return cached result if fresh ----
+  if (exists(key, envir = .cache)) {
+    entry <- get(key, envir = .cache)
+    if (difftime(now, entry$time, units = "secs") < CACHE_TTL) {
+      message("Cache hit: ", key)
+      return(entry$data)
+    } else {
+      rm(list = key, envir = .cache)
+    }
+  }
+  
+  message("Cache miss: ", key)
+  
+  # ---- Query DB ----
   con <- get_con()
   on.exit(dbDisconnect(con, shutdown = TRUE))
   
   sql <- "
-    SELECT student_name, student_class, student_section,
-           admission_number, balance, payment_link
+    SELECT *
     FROM (
       SELECT *,
              ROW_NUMBER() OVER (
                PARTITION BY admission_number
-               ORDER BY balance DESC
+               ORDER BY admission_number
              ) AS rn
-      FROM ssms.vw_balances
+      FROM students
       WHERE school_full = ?
         AND student_name ILIKE ?
         AND admission_number ILIKE ?
@@ -82,7 +103,7 @@ function(name = "", admission = "", school = "Janakpuri") {
     LIMIT 50
   "
   
-  dbGetQuery(
+  df <- dbGetQuery(
     con, sql,
     params = list(
       school,
@@ -90,5 +111,9 @@ function(name = "", admission = "", school = "Janakpuri") {
       paste0('%', admission, '%')
     )
   )
+  
+  # ---- Store in cache ----
+  assign(key, list(time = now, data = df), envir = .cache)
+  
+  df
 }
-
