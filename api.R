@@ -60,5 +60,5 @@ function(name = "", admission = "", school = "Janakpuri", res) {
       DATA$school_full == school,
   ]
   
-  head(df, 50)
+ 
 }
