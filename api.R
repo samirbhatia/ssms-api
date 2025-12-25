@@ -4,7 +4,20 @@ library(duckdb)
 
 # ---- Simple in-memory cache ----
 .cache <- new.env(parent = emptyenv())
-CACHE_TTL <- 90000  # seconds = 
+CACHE_TTL <- 3000  # seconds = 
+
+MAX_CACHE_KEYS <- 500
+
+prune_cache <- function() {
+  keys <- ls(.cache)
+  if (length(keys) > MAX_CACHE_KEYS) {
+    rm(list = keys[1:100], envir = .cache)
+  }
+}
+
+assign(key, list(time = now, data = df), envir = .cache)
+prune_cache()
+
 
 #* @get /
 #* @serializer html
@@ -33,11 +46,11 @@ get_con <- function() {
   
   con <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
   
-  DBI::dbExecute(con, "INSTALL motherduck;")
+  # install/load only once per session
+  try(DBI::dbExecute(con, "INSTALL motherduck;"), silent = TRUE)
   DBI::dbExecute(con, "LOAD motherduck;")
   
   DBI::dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
-  
   con
 }
 
@@ -52,8 +65,7 @@ function() {
 #* @param name Student name (min 3 chars)
 #* @param admission Admission number (min 3 chars)
 #* @param school School/branch name
-#* #* @serializer json
-
+#* @serializer json
 function(name = "", admission = "", school = "Janakpuri", res) {
   
   name <- trimws(name)
