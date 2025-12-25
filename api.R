@@ -1,12 +1,5 @@
-library(plumber)
-library(DBI)
-library(duckdb)
-
-# ---- Simple in-memory cache ----
-# ---- Simple in-memory cache ----
 .cache <- new.env(parent = emptyenv())
 CACHE_TTL <- 300  # 5 minutes
-
 
 #* @get /
 #* @serializer html
@@ -65,16 +58,14 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
   
-  # ---- Build cache key FIRST ----
+  ## ✅ define key first
   key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
   now <- Sys.time()
   
-  # ---- Check cache ----
+  ## ✅ cache hit
   if (exists(key, envir = .cache)) {
     entry <- get(key, envir = .cache)
-    age <- as.numeric(difftime(now, entry$time, units = "secs"))
-    
-    if (age < CACHE_TTL) {
+    if (difftime(now, entry$time, units = "secs") < CACHE_TTL) {
       message("Cache hit: ", key)
       return(entry$data)
     } else {
@@ -84,9 +75,9 @@ function(name = "", admission = "", school = "Janakpuri", res) {
   
   message("Cache miss: ", key)
   
-  # ---- Query DB ----
+  ## DB query
   con <- get_con()
-  on.exit(dbDisconnect(con, shutdown = TRUE))
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   
   sql <- "
     SELECT *
@@ -105,7 +96,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     LIMIT 50
   "
   
-  df <- dbGetQuery(
+  df <- DBI::dbGetQuery(
     con, sql,
     params = list(
       school,
@@ -114,7 +105,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     )
   )
   
-  # ---- Store in cache ----
+  ## ✅ store in cache
   assign(key, list(time = now, data = df), envir = .cache)
   
   df
