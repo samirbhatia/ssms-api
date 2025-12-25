@@ -4,7 +4,7 @@ library(duckdb)
 
 # ---- Simple in-memory cache ----
 .cache <- new.env(parent = emptyenv())
-CACHE_TTL <- 3000  # seconds = 
+CACHE_TTL <- 900  # seconds = 
 
 MAX_CACHE_KEYS <- 500
 
@@ -73,11 +73,16 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     return(list(error = "Enter at least 3 characters for both Name and Admission Number"))
   }
   
-  # ---- Build cache key FIRST ----
-  key <- paste(tolower(school), tolower(name), tolower(admission), sep = "|")
+  # ---- Cache key ----
+  key <- paste(
+    tolower(school),
+    tolower(name),
+    tolower(admission),
+    sep = "|"
+  )
   now <- Sys.time()
   
-  # ---- Cache lookup ----
+  # ---- Return cached result if fresh ----
   if (exists(key, envir = .cache)) {
     entry <- get(key, envir = .cache)
     if (difftime(now, entry$time, units = "secs") < CACHE_TTL) {
@@ -120,7 +125,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
     )
   )
   
-  # ---- Store in cache AFTER query ----
+  # ---- Store in cache ----
   assign(key, list(time = now, data = df), envir = .cache)
   
   df
