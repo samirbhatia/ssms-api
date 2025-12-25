@@ -7,19 +7,30 @@ DATA <- NULL
 # ---- Load data once at startup ----
 load_data <- function() {
   tryCatch({
+    message("➡️ Starting load_data()")
+    
     token <- Sys.getenv("MOTHERDUCK_TOKEN")
     if (token == "") stop("MOTHERDUCK_TOKEN not set")
     
+    message("✅ Token present")
+    
     con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+    message("✅ DuckDB connected")
+    
     dbExecute(con, "INSTALL motherduck;")
     dbExecute(con, "LOAD motherduck;")
+    message("✅ MotherDuck extension loaded")
+    
     dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
+    message("✅ Attached md:ssms_school")
     
     df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
+    message("✅ Query done")
+    
     dbDisconnect(con, shutdown = TRUE)
     
     df <- as.data.frame(df)
-    message("✅ Loaded ", nrow(df), " rows from MotherDuck")
+    message("🎉 Loaded ", nrow(df), " rows")
     
     df
   }, error = function(e) {
@@ -30,6 +41,10 @@ load_data <- function() {
 
 # 👇 force into global env
 DATA <<- load_data()
+
+if (is.null(DATA) || !is.data.frame(DATA) || nrow(DATA) == 0) {
+  stop("❌ DATA failed to load at startup. Check MotherDuck connection / token.")
+}
 
 # ---- CORS (for Squarespace later) ----
 #* @filter cors
