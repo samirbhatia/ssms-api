@@ -40,10 +40,8 @@ load_data <- function() {
 }
 
 # 👇 force into global env
-DATA <<- load_data()
+DATA <- load_data()
 
-if (is.null(DATA) || !is.data.frame(DATA) || nrow(DATA) == 0) {
-  stop("❌ DATA failed to load at startup. Check MotherDuck connection / token.")
 }
 
 # ---- CORS (for Squarespace later) ----
