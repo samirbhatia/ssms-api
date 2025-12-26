@@ -42,8 +42,6 @@ load_data <- function() {
 # 👇 force into global env
 DATA <- load_data()
 
-}
-
 # ---- CORS (for Squarespace later) ----
 #* @filter cors
 function(req, res) {
