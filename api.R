@@ -76,9 +76,17 @@ fm_payment_exists <- function(token, payment_id) {
     )
   )
   
-  if (httr::status_code(res) == 404) return(FALSE)
-  if (httr::status_code(res) == 200) return(TRUE)
+  status <- httr::status_code(res)
   
+  if (status == 200) {
+    return(TRUE)   # record exists
+  }
+  
+  if (status == 401) {
+    return(FALSE)  # no matching records (EXPECTED)
+  }
+  
+  # Anything else is a real error
   httr::stop_for_status(res)
 }
 
@@ -199,30 +207,29 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 # =========================================================
 # Razorpay Webhook (FINAL – CORRECT)
 # =========================================================
+
 #* @post /webhook/razorpay
+#* @parser text
 #* @serializer json
-function(req, res) {
+function(req, res, body) {
   
   message("🔥🔥🔥 FINAL WEBHOOK HANDLER HIT 🔥🔥🔥")
   
+  # 1️⃣ Signature header
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   if (is.null(sig)) {
     res$status <- 400
     return(list(error = "Missing Razorpay signature"))
   }
   
-  raw_body <- req$postBody
-  if (is.null(raw_body) || raw_body == "") {
-    res$status <- 400
-    return(list(error = "Empty request body"))
-  }
-  
-  if (!verify_razorpay_signature(raw_body, sig)) {
+  # 2️⃣ Verify signature using RAW body string
+  if (!verify_razorpay_signature(body, sig)) {
     res$status <- 401
     return(list(error = "Invalid Razorpay signature"))
   }
   
-  payload <- jsonlite::fromJSON(raw_body, simplifyVector = FALSE)
+  # 3️⃣ Parse JSON AFTER verification
+  payload <- jsonlite::fromJSON(body, simplifyVector = FALSE)
   
   if (payload$event != "payment.captured") {
     return(list(status = "ignored"))
@@ -231,19 +238,22 @@ function(req, res) {
   payment <- payload$payload$payment$entity
   payment_id <- payment$id
   
+  # 4️⃣ FileMaker login
   token <- fm_login()
   
+  # 5️⃣ Idempotency check
   if (fm_payment_exists(token, payment_id)) {
     message("⚠️ Duplicate webhook ignored: ", payment_id)
     return(list(status = "duplicate"))
   }
   
+  # 6️⃣ Build record
   record <- list(
     payment_id = payment$id,
     order_id = payment$order_id,
-    `total payment amount` = payment$amount / 100,
+    "total payment amount" = payment$amount / 100,
     currency = payment$currency,
-    `payment status` = payment$status,
+    "payment status" = payment$status,
     student_name = payment$notes$student_name,
     admission_number = payment$notes$admission_number,
     branch = payment$notes$branch,
@@ -251,6 +261,7 @@ function(req, res) {
     phone = payment$contact
   )
   
+  # 7️⃣ Insert into FileMaker
   fm_insert_razor(token, record)
   
   message("✅ Payment inserted: ", payment_id)
