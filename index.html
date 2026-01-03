@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Student Fee Search</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    max-width: 700px;
+    margin: 40px auto;
+    background: #fafafa;
+  }
+  h2 { text-align: center; }
+
+  .box {
+    border: 1px solid #ddd;
+    padding: 25px;
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  label { display: block; margin-top: 10px; font-weight: bold; }
+  input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    margin-top: 5px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+
+  .schools label { font-weight: normal; }
+
+  button {
+    margin-top: 15px;
+    padding: 12px;
+    width: 100%;
+    background: #2d8cff;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  button:disabled {
+    background: #999;
+    cursor: not-allowed;
+  }
+
+  .result { margin-top: 20px; }
+  .card {
+    border: 1px solid #ddd;
+    padding: 14px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    background: #f9f9f9;
+  }
+
+  .pay {
+    display: inline-block;
+    background: #28a745;
+    color: white;
+    padding: 8px 14px;
+    text-decoration: none;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+
+  #msg { margin-top: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h2>Check Outstanding Fees</h2>
+
+<div class="box">
+
+  <label>School</label>
+  <div class="schools">
+    <label><input type="radio" name="school" value="Janakpuri" checked> Janakpuri</label>
+    <label><input type="radio" name="school" value="Narang Colony"> Narang Colony</label>
+    <label><input type="radio" name="school" value="Paschim Vihar Sr"> Paschim Vihar Sr</label>
+    <label><input type="radio" name="school" value="Paschim Vihar Jr"> Paschim Vihar Jr</label>
+  </div>
+
+  <label for="name">Student Name</label>
+  <input id="name" type="text" placeholder="Enter at least 3 characters" />
+
+  <label for="admission">Admission Number</label>
+  <input id="admission" type="text" placeholder="Enter at least 3 characters" />
+
+  <button id="btn" onclick="search()">Search</button>
+
+  <div id="msg" style="color:red;"></div>
+  <div id="results" class="result"></div>
+
+</div>
+
+<script>
+const API_BASE = "https://ssms-api-en6d.onrender.com";
+let currentController = null;
+
+// ---- Warm up Render app on page load ----
+async function warmUp() {
+  const msg = document.getElementById('msg');
+  msg.style.color = "#555";
+  msg.textContent = "Warming up server…";
+
+  try {
+    await fetch(`${API_BASE}/health`, { cache: "no-store" });
+    msg.textContent = "";
+  } catch (e) {
+    msg.textContent = "⚠️ Server may take a moment to respond.";
+  }
+}
+
+window.addEventListener("DOMContentLoaded", warmUp);
+
+// ---- Search ----
+async function search() {
+  const name = document.getElementById('name').value.trim();
+  const admission = document.getElementById('admission').value.trim();
+  const school = document.querySelector('input[name="school"]:checked').value;
+  const msg = document.getElementById('msg');
+  const results = document.getElementById('results');
+  const btn = document.getElementById('btn');
+
+  msg.style.color = "red";
+  msg.textContent = "";
+  results.innerHTML = "";
+
+  if (name.length < 3 || admission.length < 3) {
+    msg.textContent = "Enter at least 3 characters for both Name and Admission Number.";
+    return;
+  }
+
+  // Cancel any previous request
+  if (currentController) {
+    currentController.abort();
+  }
+  currentController = new AbortController();
+
+  btn.disabled = true;
+  btn.textContent = "Searching...";
+
+  const url = `${API_BASE}/search?name=${encodeURIComponent(name)}&admission=${encodeURIComponent(admission)}&school=${encodeURIComponent(school)}`;
+
+  try {
+    const res = await fetch(url, { signal: currentController.signal });
+    const data = await res.json();
+
+    if (!Array.isArray(data) || data.length === 0) {
+      msg.textContent = "No matching records found.";
+      return;
+    }
+
+    msg.style.color = "green";
+    msg.textContent = `Found ${data.length} record(s):`;
+
+    data.forEach(row => {
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.innerHTML = `
+        <strong>${row.student_name}</strong><br/>
+        Class: ${row.student_class}-${row.student_section}<br/>
+        Admission: ${row.admission_number}<br/>
+        Balance: ₹${row.balance}<br/>
+        <a class="pay" href="${row.payment_link}" target="_blank">Pay Now</a>
+      `;
+      results.appendChild(div);
+    });
+
+  } catch (e) {
+    if (e.name !== "AbortError") {
+      msg.textContent = "❌ Error connecting to server. Please try again.";
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search";
+  }
+}
+</script>
+
+</body>
+</html>
