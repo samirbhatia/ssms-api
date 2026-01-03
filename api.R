@@ -201,51 +201,45 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 # =========================================================
 
 #* @post /webhook/razorpay
-#* @parser text
+#* @parser json
 #* @serializer json
 function(req, res, body) {
   
   message("🔥🔥🔥 FINAL WEBHOOK HANDLER HIT 🔥🔥🔥")
   
-  # 1️⃣ Signature header
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   if (is.null(sig)) {
     res$status <- 400
     return(list(error = "Missing Razorpay signature"))
   }
   
-  # 2️⃣ Verify signature using RAW body string
-  if (!verify_razorpay_signature(body, sig)) {
+  raw_body <- req$postBody
+  if (!verify_razorpay_signature(raw_body, sig)) {
     res$status <- 401
     return(list(error = "Invalid Razorpay signature"))
   }
   
-  # 3️⃣ Parse JSON AFTER verification
-  payload <- jsonlite::fromJSON(body, simplifyVector = FALSE)
-  
-  if (payload$event != "payment.captured") {
+  # body is already parsed JSON
+  if (body$event != "payment.captured") {
     return(list(status = "ignored"))
   }
   
-  payment <- payload$payload$payment$entity
+  payment <- body$payload$payment$entity
   payment_id <- payment$id
   
-  # 4️⃣ FileMaker login
   token <- fm_login()
   
-  # 5️⃣ Idempotency check
   if (fm_payment_exists(token, payment_id)) {
     message("⚠️ Duplicate webhook ignored: ", payment_id)
     return(list(status = "duplicate"))
   }
   
-  # 6️⃣ Build record
   record <- list(
     payment_id = payment$id,
     order_id = payment$order_id,
-    "total payment amount" = payment$amount / 100,
+    `total payment amount` = payment$amount / 100,
     currency = payment$currency,
-    "payment status" = payment$status,
+    `payment status` = payment$status,
     student_name = payment$notes$student_name,
     admission_number = payment$notes$admission_number,
     branch = payment$notes$branch,
@@ -253,7 +247,6 @@ function(req, res, body) {
     phone = payment$contact
   )
   
-  # 7️⃣ Insert into FileMaker
   fm_insert_razor(token, record)
   
   message("✅ Payment inserted: ", payment_id)
