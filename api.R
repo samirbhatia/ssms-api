@@ -206,9 +206,9 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 # Razorpay Webhook (FINAL – CORRECT)
 # =========================================================
 
-#* @post /webhook/razorpay
+#* Razorpay webhook
+#* @post /razorpay/webhook
 #* @parser json
-#* @serializer json
 function(req, res, body) {
   
   message("🔥🔥🔥 FINAL WEBHOOK HANDLER HIT 🔥🔥🔥")
@@ -219,7 +219,6 @@ function(req, res, body) {
     return(list(error = "Missing Razorpay signature"))
   }
   
-  # IMPORTANT: use raw body for signature verification
   raw_body <- req$postBody
   
   if (!verify_razorpay_signature(raw_body, sig)) {
@@ -227,7 +226,7 @@ function(req, res, body) {
     return(list(error = "Invalid Razorpay signature"))
   }
   
-  # `body` is now a parsed list
+  # body IS NOW A LIST
   if (body$event != "payment.captured") {
     return(list(status = "ignored"))
   }
@@ -244,15 +243,15 @@ function(req, res, body) {
   
   record <- list(
     payment_id = payment$id,
-    order_id   = payment$order_id,
+    order_id = payment$order_id,
     `total payment amount` = payment$amount / 100,
-    currency   = payment$currency,
+    currency = payment$currency,
     `payment status` = payment$status,
     student_name = payment$notes$student_name,
     admission_number = payment$notes$admission_number,
     branch = payment$notes$branch,
-    email  = payment$email,
-    phone  = payment$contact
+    email = payment$email,
+    phone = payment$contact
   )
   
   fm_insert_razor(token, record)
