@@ -208,14 +208,16 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 
 #* Razorpay webhook
 #* @post /razorpay/webhook
-#* @parser json
-function(req, res, body) {
+#* @parser text
+#* @serializer json
+function(req, res) {
   
   message("🔥🔥🔥 FINAL WEBHOOK HANDLER HIT 🔥🔥🔥")
   
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   if (is.null(sig)) {
     res$status <- 400
+    message("❌ Missing Razorpay signature")
     return(list(error = "Missing Razorpay signature"))
   }
   
@@ -223,15 +225,20 @@ function(req, res, body) {
   
   if (!verify_razorpay_signature(raw_body, sig)) {
     res$status <- 401
+    message("❌ Invalid Razorpay signature")
     return(list(error = "Invalid Razorpay signature"))
   }
   
-  # body IS NOW A LIST
-  if (body$event != "payment.captured") {
+  payload <- jsonlite::fromJSON(raw_body, simplifyVector = FALSE)
+  
+  message("📦 Event received: ", payload$event)
+  
+  if (payload$event != "payment.captured") {
+    message("ℹ️ Event ignored")
     return(list(status = "ignored"))
   }
   
-  payment <- body$payload$payment$entity
+  payment <- payload$payload$payment$entity
   payment_id <- payment$id
   
   token <- fm_login()
@@ -243,15 +250,15 @@ function(req, res, body) {
   
   record <- list(
     payment_id = payment$id,
-    order_id = payment$order_id,
+    order_id   = payment$order_id,
     `total payment amount` = payment$amount / 100,
-    currency = payment$currency,
+    currency   = payment$currency,
     `payment status` = payment$status,
     student_name = payment$notes$student_name,
     admission_number = payment$notes$admission_number,
     branch = payment$notes$branch,
-    email = payment$email,
-    phone = payment$contact
+    email  = payment$email,
+    phone  = payment$contact
   )
   
   fm_insert_razor(token, record)
