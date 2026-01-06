@@ -206,9 +206,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 # Razorpay Webhook (FINAL – CORRECT)
 # =========================================================
 
-#* Razorpay webhook
 #* @post /razorpay/webhook
-#* @parser text
 #* @serializer json
 function(req, res) {
   
@@ -216,21 +214,27 @@ function(req, res) {
   
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   if (is.null(sig)) {
-    res$status <- 400
     message("❌ Missing Razorpay signature")
+    res$status <- 400
     return(list(error = "Missing Razorpay signature"))
   }
   
   raw_body <- req$postBody
+  message("📦 Raw body length: ", nchar(raw_body))
+  
+  if (is.null(raw_body) || nchar(raw_body) == 0) {
+    message("❌ Empty request body")
+    res$status <- 400
+    return(list(error = "Empty request body"))
+  }
   
   if (!verify_razorpay_signature(raw_body, sig)) {
-    res$status <- 401
     message("❌ Invalid Razorpay signature")
+    res$status <- 401
     return(list(error = "Invalid Razorpay signature"))
   }
   
   payload <- jsonlite::fromJSON(raw_body, simplifyVector = FALSE)
-  
   message("📦 Event received: ", payload$event)
   
   if (payload$event != "payment.captured") {
