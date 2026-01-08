@@ -54,8 +54,8 @@ fm_login <- function() {
     ),
     authenticate(FM_USER, FM_PASSWORD),
     add_headers("Content-Type" = "application/json"),
-    body = list(),
-    encode = "json",
+    body = "{}",
+    encode = "raw",
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
@@ -64,6 +64,7 @@ fm_login <- function() {
   .fm_token
 }
 
+# ---- idempotency check (CORRECT + SAFE) ----
 fm_payment_exists <- function(token, payment_id) {
   
   url <- paste0(
@@ -75,7 +76,7 @@ fm_payment_exists <- function(token, payment_id) {
   
   res <- httr::POST(
     url,
-    httr::add_headers(
+    add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
@@ -84,7 +85,7 @@ fm_payment_exists <- function(token, payment_id) {
       limit = 1
     ),
     encode = "json",
-    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- httr::status_code(res)
@@ -94,20 +95,9 @@ fm_payment_exists <- function(token, payment_id) {
   }
   
   if (status == 401) {
-    return(FALSE)  # NOT FOUND — this is OK
+    return(FALSE)  # not found (NORMAL)
   }
   
-  # Only real failures reach here
-  message("❌ Unexpected FileMaker response: ", httr::content(res, as = "text"))
-  return(FALSE)
-}
-  
-  # ✅ No records found (THIS IS NORMAL)
-  if (status == 401) {
-    return(FALSE)
-  }
-  
-  # ❌ Anything else is a real error
   stop(
     "❌ FileMaker find failed: ",
     httr::content(res, as = "text")
@@ -123,29 +113,22 @@ fm_insert_razor <- function(token, record) {
       FM_FILE,
       "/layouts/razor/records"
     ),
-    httr::add_headers(
+    add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
     body = list(fieldData = record),
     encode = "json",
-    httr::config(
-      ssl_verifypeer = FALSE,
-      ssl_verifyhost = FALSE
-    )
+    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- httr::status_code(res)
   body   <- httr::content(res, as = "text", encoding = "UTF-8")
   
   if (status != 200) {
-    message("❌ FileMaker insert failed")
-    message("🔎 Status: ", status)
-    message("📦 Response body: ", body)
-    stop("FileMaker insert rejected")
+    stop("❌ FileMaker insert failed: ", body)
   }
   
-  message("🧾 FileMaker insert OK")
   invisible(TRUE)
 }
 
@@ -184,10 +167,8 @@ function(req, res) {
     token <- fm_login()
     
     if (!fm_payment_exists(token, payment$id)) {
-  
-      safe <- function(x) {
-        if (is.null(x) || length(x) == 0) "" else x
-      }
+      
+      safe <- function(x) if (is.null(x) || length(x) == 0) "" else x
       
       record <- list(
         payment_id = safe(payment$id),
@@ -204,6 +185,8 @@ function(req, res) {
       
       fm_insert_razor(token, record)
       message("✅ Payment inserted: ", payment$id)
+    } else {
+      message("⚠️ Duplicate ignored: ", payment$id)
     }
     
   }, error = function(e) {
