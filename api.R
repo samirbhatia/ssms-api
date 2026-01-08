@@ -89,25 +89,22 @@ fm_payment_exists <- function(token, payment_id) {
   )
   
   status <- httr::status_code(res)
-  body   <- httr::content(res, as = "parsed", simplifyVector = TRUE)
   
   # ✅ Record exists
-  if (status == 200 && length(body$response$data) > 0) {
+  if (status == 200) {
     return(TRUE)
   }
   
-  # ✅ No record found (THIS IS EXPECTED FOR NEW PAYMENTS)
-  if (status == 401 &&
-      any(grepl("No records match", body$messages[[1]]$message))) {
+  # ✅ Record does NOT exist (this is NORMAL)
+  if (status == 401) {
     return(FALSE)
   }
   
-  # ❌ Any other 401 = real auth error
-  if (status == 401) {
-    stop("❌ FileMaker auth error: ", body$messages[[1]]$message)
-  }
-  
-  stop("❌ FileMaker find failed: ", jsonlite::toJSON(body, auto_unbox = TRUE))
+  # ❌ Real error
+  stop(
+    "❌ FileMaker find failed: ",
+    httr::content(res, as = "text")
+  )
 }
 
 # ---- safe insert with logging ----
