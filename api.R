@@ -65,30 +65,50 @@ fm_login <- function() {
 }
 
 fm_payment_exists <- function(token, payment_id) {
-  res <- httr::POST(
-    paste0(
-      FM_HOST,
-      "/fmi/data/vLatest/databases/",
-      FM_FILE,
-      "/layouts/razor/_find"
-    ),
-    add_headers(
-      Authorization = paste("Bearer", token),
-      "Content-Type" = "application/json"
-    ),
-    body = list(
-      query = list(list(payment_id = payment_id)),
-      limit = 1
-    ),
-    encode = "json",
-    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+  
+  res <- tryCatch({
+    httr::POST(
+      paste0(
+        FM_HOST,
+        "/fmi/data/vLatest/databases/",
+        FM_FILE,
+        "/layouts/razor/_find"
+      ),
+      httr::add_headers(
+        Authorization = paste("Bearer", token),
+        "Content-Type" = "application/json"
+      ),
+      body = list(
+        query = list(list(payment_id = payment_id)),
+        limit = 1
+      ),
+      encode = "json",
+      httr::config(
+        ssl_verifypeer = FALSE,
+        ssl_verifyhost = FALSE
+      )
+    )
+  }, error = function(e) {
+    stop("❌ FileMaker find request failed: ", e$message)
+  })
+  
+  status <- httr::status_code(res)
+  
+  # ✅ Record exists
+  if (status == 200) {
+    return(TRUE)
+  }
+  
+  # ✅ No records found (THIS IS NORMAL)
+  if (status == 401) {
+    return(FALSE)
+  }
+  
+  # ❌ Anything else is a real error
+  stop(
+    "❌ FileMaker find failed: ",
+    httr::content(res, as = "text")
   )
-  
-  status <- status_code(res)
-  if (status == 200) return(TRUE)
-  if (status == 401) return(FALSE)
-  
-  stop("❌ FileMaker find failed: ", content(res, as = "text"))
 }
 
 fm_insert_razor <- function(token, record) {
