@@ -66,38 +66,41 @@ fm_login <- function() {
 
 fm_payment_exists <- function(token, payment_id) {
   
-  res <- tryCatch({
-    httr::POST(
-      paste0(
-        FM_HOST,
-        "/fmi/data/vLatest/databases/",
-        FM_FILE,
-        "/layouts/razor/_find"
-      ),
-      httr::add_headers(
-        Authorization = paste("Bearer", token),
-        "Content-Type" = "application/json"
-      ),
-      body = list(
-        query = list(list(payment_id = payment_id)),
-        limit = 1
-      ),
-      encode = "json",
-      httr::config(
-        ssl_verifypeer = FALSE,
-        ssl_verifyhost = FALSE
-      )
-    )
-  }, error = function(e) {
-    stop("❌ FileMaker find request failed: ", e$message)
-  })
+  url <- paste0(
+    FM_HOST,
+    "/fmi/data/vLatest/databases/",
+    FM_FILE,
+    "/layouts/razor/_find"
+  )
+  
+  res <- httr::POST(
+    url,
+    httr::add_headers(
+      Authorization = paste("Bearer", token),
+      "Content-Type" = "application/json"
+    ),
+    body = list(
+      query = list(list(payment_id = payment_id)),
+      limit = 1
+    ),
+    encode = "json",
+    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+  )
   
   status <- httr::status_code(res)
   
-  # ✅ Record exists
   if (status == 200) {
-    return(TRUE)
+    return(TRUE)   # duplicate
   }
+  
+  if (status == 401) {
+    return(FALSE)  # NOT FOUND — this is OK
+  }
+  
+  # Only real failures reach here
+  message("❌ Unexpected FileMaker response: ", httr::content(res, as = "text"))
+  return(FALSE)
+}
   
   # ✅ No records found (THIS IS NORMAL)
   if (status == 401) {
