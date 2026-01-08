@@ -6,16 +6,18 @@ library(digest)
 library(httr)
 
 # =========================================================
-# Environment
+# Environment (DO NOT STOP AT LOAD TIME)
 # =========================================================
 
-FM_HOST <- Sys.getenv("FM_HOST")
-FM_FILE <- Sys.getenv("FM_FILE")
-FM_USER <- Sys.getenv("FM_USER")
+FM_HOST     <- Sys.getenv("FM_HOST")
+FM_FILE     <- Sys.getenv("FM_FILE")
+FM_USER     <- Sys.getenv("FM_USER")
 FM_PASSWORD <- Sys.getenv("FM_PASSWORD")
 
-if (FM_HOST == "" || FM_FILE == "" || FM_USER == "" || FM_PASSWORD == "") {
-  stop("❌ FileMaker environment variables not fully set")
+check_fm_env <- function() {
+  if (FM_HOST == "" || FM_FILE == "" || FM_USER == "" || FM_PASSWORD == "") {
+    stop("FileMaker environment variables not set")
+  }
 }
 
 # =========================================================
@@ -64,18 +66,16 @@ fm_login <- function() {
   .fm_token
 }
 
-# ---- idempotency check (CORRECT + SAFE) ----
+# ---- idempotency check (correct FileMaker find) ----
 fm_payment_exists <- function(token, payment_id) {
   
-  url <- paste0(
-    FM_HOST,
-    "/fmi/data/vLatest/databases/",
-    FM_FILE,
-    "/layouts/razor/_find"
-  )
-  
   res <- httr::POST(
-    url,
+    paste0(
+      FM_HOST,
+      "/fmi/data/vLatest/databases/",
+      FM_FILE,
+      "/layouts/razor/_find"
+    ),
     add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
@@ -90,18 +90,10 @@ fm_payment_exists <- function(token, payment_id) {
   
   status <- httr::status_code(res)
   
-  if (status == 200) {
-    return(TRUE)   # duplicate
-  }
+  if (status == 200) return(TRUE)   # duplicate
+  if (status == 401) return(FALSE)  # NOT FOUND — expected
   
-  if (status == 401) {
-    return(FALSE)  # not found (NORMAL)
-  }
-  
-  stop(
-    "❌ FileMaker find failed: ",
-    httr::content(res, as = "text")
-  )
+  stop("FileMaker find failed: ", httr::content(res, as = "text"))
 }
 
 fm_insert_razor <- function(token, record) {
@@ -122,18 +114,106 @@ fm_insert_razor <- function(token, record) {
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
-  status <- httr::status_code(res)
-  body   <- httr::content(res, as = "text", encoding = "UTF-8")
-  
-  if (status != 200) {
-    stop("❌ FileMaker insert failed: ", body)
+  if (httr::status_code(res) != 200) {
+    stop("FileMaker insert failed: ", httr::content(res, as = "text"))
   }
   
-  invisible(TRUE)
+  TRUE
 }
 
 # =========================================================
-# Razorpay Webhook
+# Load MotherDuck data at startup (search only)
+# =========================================================
+
+DATA <- NULL
+
+load_data <- function() {
+  tryCatch({
+    message("➡️ Loading MotherDuck data")
+    
+    con <- dbConnect(duckdb(), dbdir = ":memory:")
+    dbExecute(con, "INSTALL motherduck;")
+    dbExecute(con, "LOAD motherduck;")
+    dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
+    
+    df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
+    dbDisconnect(con, shutdown = TRUE)
+    
+    message("🎉 Loaded ", nrow(df), " rows")
+    df
+  }, error = function(e) {
+    message("❌ load_data failed: ", e$message)
+    NULL
+  })
+}
+
+DATA <- load_data()
+
+# =========================================================
+# CORS
+# =========================================================
+
+#* @filter cors
+function(req, res) {
+  res$setHeader("Access-Control-Allow-Origin", "*")
+  res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+  res$setHeader("Access-Control-Allow-Headers", "Content-Type, X-Razorpay-Signature")
+  
+  if (req$REQUEST_METHOD == "OPTIONS") {
+    res$status <- 200
+    return(list())
+  }
+  
+  plumber::forward()
+}
+
+# =========================================================
+# Health
+# =========================================================
+
+#* @get /health
+function() {
+  list(
+    status = "ok",
+    rows = if (is.data.frame(DATA)) nrow(DATA) else NA
+  )
+}
+
+# =========================================================
+# Search API (WEBSITE)
+# =========================================================
+
+#* @get /search
+#* @param name
+#* @param admission
+#* @param school
+function(name = "", admission = "", school = "Janakpuri", res) {
+  
+  if (!is.data.frame(DATA)) {
+    res$status <- 500
+    return(list(error = "DATA not loaded"))
+  }
+  
+  if (nchar(name) < 3 || nchar(admission) < 3) {
+    res$status <- 400
+    return(list(error = "Enter at least 3 characters"))
+  }
+  
+  nm  <- tolower(trimws(name))
+  adm <- tolower(trimws(admission))
+  sch <- tolower(trimws(school))
+  
+  df <- DATA[
+    grepl(nm, tolower(DATA$student_name), fixed = TRUE) &
+      grepl(adm, tolower(DATA$admission_number), fixed = TRUE) &
+      tolower(trimws(DATA$school_full)) == sch,
+  ]
+  
+  head(df, 50)
+}
+
+# =========================================================
+# Razorpay Webhook (FAIL-SAFE)
 # =========================================================
 
 #* @post /razorpay/webhook
@@ -146,13 +226,13 @@ function(req, res) {
   raw_body <- req$postBody
   
   if (is.null(sig) || is.null(raw_body) || raw_body == "") {
-    res$status <- 400
-    return(list(error = "Invalid webhook"))
+    res$status <- 200
+    return(list(status = "ignored"))
   }
   
   if (!verify_razorpay_signature(raw_body, sig)) {
-    res$status <- 401
-    return(list(error = "Invalid signature"))
+    res$status <- 200
+    return(list(status = "invalid-signature"))
   }
   
   payload <- fromJSON(raw_body, simplifyVector = FALSE)
@@ -163,8 +243,10 @@ function(req, res) {
   
   tryCatch({
     
-    payment <- payload$payload$payment$entity
+    check_fm_env()
     token <- fm_login()
+    
+    payment <- payload$payload$payment$entity
     
     if (!fm_payment_exists(token, payment$id)) {
       
