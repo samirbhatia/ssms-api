@@ -63,9 +63,9 @@ fm_login <- function() {
 fm_payment_exists <- function(token, payment_id) {
   
   url <- paste0(
-    FM_HOST,
+    Sys.getenv("FM_HOST"),
     "/fmi/data/vLatest/databases/",
-    FM_FILE,
+    Sys.getenv("FM_FILE"),
     "/layouts/razor/_find"
   )
   
@@ -76,19 +76,38 @@ fm_payment_exists <- function(token, payment_id) {
       "Content-Type" = "application/json"
     ),
     body = list(
-      query = list(list(payment_id = payment_id)),
+      query = list(
+        list(payment_id = payment_id)
+      ),
       limit = 1
     ),
     encode = "json",
-    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    httr::config(
+      ssl_verifypeer = FALSE,
+      ssl_verifyhost = FALSE
+    )
   )
   
   status <- httr::status_code(res)
+  body   <- httr::content(res, as = "parsed", simplifyVector = TRUE)
   
-  if (status == 401) return(FALSE)   # no match
-  if (status == 200) return(TRUE)
+  # ✅ Record exists
+  if (status == 200 && length(body$response$data) > 0) {
+    return(TRUE)
+  }
   
-  stop("❌ FileMaker find failed: ", httr::content(res, as = "text"))
+  # ✅ No record found (THIS IS EXPECTED FOR NEW PAYMENTS)
+  if (status == 401 &&
+      any(grepl("No records match", body$messages[[1]]$message))) {
+    return(FALSE)
+  }
+  
+  # ❌ Any other 401 = real auth error
+  if (status == 401) {
+    stop("❌ FileMaker auth error: ", body$messages[[1]]$message)
+  }
+  
+  stop("❌ FileMaker find failed: ", jsonlite::toJSON(body, auto_unbox = TRUE))
 }
 
 # ---- safe insert with logging ----
@@ -219,6 +238,9 @@ function(req, res) {
   
   message("🔥 Razorpay webhook hit")
   
+  # -------------------------
+  # 1. Signature check
+  # -------------------------
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   if (is.null(sig)) {
     res$status <- 400
@@ -226,9 +248,9 @@ function(req, res) {
   }
   
   raw_body <- req$postBody
-  if (is.null(raw_body) || nchar(raw_body) == 0) {
+  if (is.null(raw_body) || raw_body == "") {
     res$status <- 400
-    return(list(error = "Empty body"))
+    return(list(error = "Empty request body"))
   }
   
   if (!verify_razorpay_signature(raw_body, sig)) {
@@ -236,36 +258,57 @@ function(req, res) {
     return(list(error = "Invalid Razorpay signature"))
   }
   
+  # -------------------------
+  # 2. Parse payload
+  # -------------------------
   payload <- jsonlite::fromJSON(raw_body, simplifyVector = FALSE)
   
   if (payload$event != "payment.captured") {
+    message("ℹ️ Event ignored: ", payload$event)
     return(list(status = "ignored"))
   }
   
   payment <- payload$payload$payment$entity
   payment_id <- payment$id
   
-  token <- fm_login()
+  # -------------------------
+  # 3. Business logic (SAFE)
+  # -------------------------
+  tryCatch({
+    
+    token <- fm_login()
+    
+    if (fm_payment_exists(token, payment_id)) {
+      message("⚠️ Duplicate payment ignored: ", payment_id)
+    } else {
+      
+      record <- list(
+        payment_id = payment$id,
+        order_id   = payment$order_id,
+        `total payment amount` = payment$amount / 100,
+        currency   = payment$currency,
+        `payment status` = payment$status,
+        student_name = payment$notes$student_name,
+        admission_number = payment$notes$admission_number,
+        branch = payment$notes$branch,
+        email  = payment$email,
+        phone  = payment$contact
+      )
+      
+      fm_insert_razor(token, record)
+      message("✅ Payment inserted: ", payment_id)
+    }
+    
+  }, error = function(e) {
+    
+    # 🔥 CRITICAL: log but DO NOT fail webhook
+    message("❌ Webhook processing error: ", e$message)
+    
+  })
   
-  if (fm_payment_exists(token, payment_id)) {
-    message("⚠️ Duplicate ignored: ", payment_id)
-    return(list(status = "duplicate"))
-  }
-  
-  # ---- ONLY validation-safe fields ----
-  record <- list(
-    payment_id       = payment$id,
-    order_id         = payment$order_id,
-    `payment status` = payment$status,
-    admission_number = payment$notes$admission_number,
-    student_name     = payment$notes$student_name,
-    branch           = payment$notes$branch,
-    email            = payment$email,
-    phone            = payment$contact
-  )
-  
-  fm_insert_razor(token, record)
-  
-  message("✅ Payment inserted: ", payment_id)
+  # -------------------------
+  # 4. ALWAYS respond OK
+  # -------------------------
+  res$status <- 200
   list(status = "ok")
 }
