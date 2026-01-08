@@ -112,6 +112,7 @@ fm_payment_exists <- function(token, payment_id) {
 }
 
 fm_insert_razor <- function(token, record) {
+  
   res <- httr::POST(
     paste0(
       FM_HOST,
@@ -119,16 +120,29 @@ fm_insert_razor <- function(token, record) {
       FM_FILE,
       "/layouts/razor/records"
     ),
-    add_headers(
+    httr::add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
     body = list(fieldData = record),
     encode = "json",
-    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    httr::config(
+      ssl_verifypeer = FALSE,
+      ssl_verifyhost = FALSE
+    )
   )
   
-  httr::stop_for_status(res)
+  status <- httr::status_code(res)
+  body   <- httr::content(res, as = "text", encoding = "UTF-8")
+  
+  if (status != 200) {
+    message("❌ FileMaker insert failed")
+    message("🔎 Status: ", status)
+    message("📦 Response body: ", body)
+    stop("FileMaker insert rejected")
+  }
+  
+  message("🧾 FileMaker insert OK")
   invisible(TRUE)
 }
 
@@ -167,18 +181,22 @@ function(req, res) {
     token <- fm_login()
     
     if (!fm_payment_exists(token, payment$id)) {
+  
+      safe <- function(x) {
+        if (is.null(x) || length(x) == 0) "" else x
+      }
       
       record <- list(
-        payment_id = payment$id,
-        order_id = payment$order_id,
-        `total payment amount` = payment$amount / 100,
-        currency = payment$currency,
-        `payment status` = payment$status,
-        student_name = payment$notes$student_name,
-        admission_number = payment$notes$admission_number,
-        branch = payment$notes$branch,
-        email = payment$email,
-        phone = payment$contact
+        payment_id = safe(payment$id),
+        order_id   = safe(payment$order_id),
+        `total payment amount` = as.numeric(payment$amount) / 100,
+        currency   = safe(payment$currency),
+        `payment status` = safe(payment$status),
+        student_name = safe(payment$notes$student_name),
+        admission_number = safe(payment$notes$admission_number),
+        branch = safe(payment$notes$branch),
+        email  = safe(payment$email),
+        phone  = as.character(safe(payment$contact))
       )
       
       fm_insert_razor(token, record)
