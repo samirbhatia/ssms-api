@@ -87,14 +87,23 @@ fm_payment_exists <- function(token, payment_id) {
       limit = 1
     ),
     encode = "json",
-    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    httr::config(
+      ssl_verifypeer = FALSE,
+      ssl_verifyhost = FALSE
+    )
   )
   
   status <- httr::status_code(res)
   
-  if (status == 200) return(TRUE)   # record exists
-  if (status == 401) return(FALSE)  # NO RECORD — THIS IS NORMAL
+  if (status == 200) {
+    return(TRUE)      # duplicate payment
+  }
   
+  if (status == 401) {
+    return(FALSE)     # NEW payment — THIS IS NORMAL
+  }
+  
+  # only real errors reach here
   stop("FileMaker _find failed: ", httr::content(res, as = "text"))
 }
 
