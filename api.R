@@ -69,14 +69,16 @@ fm_login <- function() {
 # ---- idempotency check (correct FileMaker find) ----
 fm_payment_exists <- function(token, payment_id) {
   
+  url <- paste0(
+    FM_HOST,
+    "/fmi/data/vLatest/databases/",
+    FM_FILE,
+    "/layouts/razor/_find"
+  )
+  
   res <- httr::POST(
-    paste0(
-      FM_HOST,
-      "/fmi/data/vLatest/databases/",
-      FM_FILE,
-      "/layouts/razor/_find"
-    ),
-    add_headers(
+    url,
+    httr::add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
@@ -85,40 +87,54 @@ fm_payment_exists <- function(token, payment_id) {
       limit = 1
     ),
     encode = "json",
-    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- httr::status_code(res)
   
-  if (status == 200) return(TRUE)   # duplicate
-  if (status == 401) return(FALSE)  # NOT FOUND — expected
+  if (status == 200) return(TRUE)   # record exists
+  if (status == 401) return(FALSE)  # NO RECORD — THIS IS NORMAL
   
-  stop("FileMaker find failed: ", httr::content(res, as = "text"))
+  stop("FileMaker _find failed: ", httr::content(res, as = "text"))
 }
 
 fm_insert_razor <- function(token, record) {
   
-  res <- httr::POST(
-    paste0(
-      FM_HOST,
-      "/fmi/data/vLatest/databases/",
-      FM_FILE,
-      "/layouts/razor/records"
-    ),
-    add_headers(
-      Authorization = paste("Bearer", token),
-      "Content-Type" = "application/json"
-    ),
-    body = list(fieldData = record),
-    encode = "json",
-    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
-  )
-  
-  if (httr::status_code(res) != 200) {
-    stop("FileMaker insert failed: ", httr::content(res, as = "text"))
+  do_insert <- function(token) {
+    httr::POST(
+      paste0(
+        FM_HOST,
+        "/fmi/data/vLatest/databases/",
+        FM_FILE,
+        "/layouts/razor/records"
+      ),
+      httr::add_headers(
+        Authorization = paste("Bearer", token),
+        "Content-Type" = "application/json"
+      ),
+      body = list(fieldData = record),
+      encode = "json",
+      httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    )
   }
   
-  TRUE
+  res <- do_insert(token)
+  
+  if (httr::status_code(res) == 200) return(TRUE)
+  
+  body <- httr::content(res, as = "parsed", simplifyVector = TRUE)
+  
+  # 🔁 Token expired → relogin once
+  if (!is.null(body$messages[[1]]$code) && body$messages[[1]]$code == "952") {
+    message("🔁 FileMaker token expired — re-authenticating")
+    .fm_token <<- NULL
+    token <- fm_login()
+    res <- do_insert(token)
+    
+    if (httr::status_code(res) == 200) return(TRUE)
+  }
+  
+  stop("FileMaker insert failed: ", httr::content(res, as = "text"))
 }
 
 # =========================================================
