@@ -87,25 +87,29 @@ fm_payment_exists <- function(token, payment_id) {
       limit = 1
     ),
     encode = "json",
-    httr::config(
-      ssl_verifypeer = FALSE,
-      ssl_verifyhost = FALSE
-    )
+    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- httr::status_code(res)
+  body   <- httr::content(res, as = "parsed", simplifyVector = TRUE)
   
-  # ✅ record exists
+  # ✅ Record exists
   if (status == 200) return(TRUE)
   
-  # ✅ record does NOT exist (THIS IS NORMAL)
-  if (status == 401) return(FALSE)
+  # ✅ Record does NOT exist (FileMaker uses 401 or 500 🤦)
+  if (
+    status %in% c(401, 500) &&
+    !is.null(body$messages[[1]]$code) &&
+    body$messages[[1]]$code == "401"
+  ) {
+    return(FALSE)
+  }
   
-  # ❌ any other status is a real error
-  message("❌ FileMaker _find unexpected status: ", status)
-  message(httr::content(res, as = "text"))
-  
-  return(FALSE)
+  # ❌ Real error
+  stop(
+    "❌ FileMaker _find failed: ",
+    jsonlite::toJSON(body, auto_unbox = TRUE)
+  )
 }
 
 fm_insert_razor <- function(token, record) {
