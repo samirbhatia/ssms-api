@@ -94,6 +94,7 @@ fm_payment_exists <- function(token, payment_id) {
   
   body_raw <- httr::content(res, as = "text", encoding = "UTF-8")
   
+  # Parse safely (never assume JSON)
   body <- tryCatch(
     jsonlite::fromJSON(body_raw, simplifyVector = FALSE),
     error = function(e) NULL
@@ -104,22 +105,16 @@ fm_payment_exists <- function(token, payment_id) {
     return(TRUE)
   }
   
-  # ✅ Not found (ALL safe variants)
+  # ✅ NOT FOUND → normal → proceed to insert
   if (status %in% c(401, 404, 500)) {
     return(FALSE)
   }
   
-  # ❌ Only truly unexpected cases
+  # ❌ Unexpected → log only, NEVER stop webhook
   message("❌ FileMaker _find unexpected status: ", status)
   message(body_raw)
-  return(FALSE)
-}
   
-  # ❌ Real error
-  stop(
-    "❌ FileMaker _find failed: ",
-    jsonlite::toJSON(body, auto_unbox = TRUE)
-  )
+  FALSE
 }
 
 fm_insert_razor <- function(token, record) {
