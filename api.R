@@ -39,6 +39,19 @@ verify_razorpay_signature <- function(raw_body, received_sig) {
 }
 
 # =========================================================
+# Safe extract helpers (CRITICAL)
+# =========================================================
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+pluck <- function(x, ...) {
+  tryCatch(
+    Reduce(function(a, b) if (is.list(a)) a[[b]] else NULL, list(x, ...)),
+    error = function(e) NULL
+  )
+}
+
+# =========================================================
 # FileMaker helpers
 # =========================================================
 
@@ -66,7 +79,7 @@ fm_login <- function() {
   .fm_token
 }
 
-# ---- idempotency check (correct FileMaker find) ----
+# ---- idempotency check ----
 fm_payment_exists <- function(token, payment_id) {
   
   url <- paste0(
@@ -78,7 +91,7 @@ fm_payment_exists <- function(token, payment_id) {
   
   res <- httr::POST(
     url,
-    httr::add_headers(
+    add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
@@ -87,39 +100,27 @@ fm_payment_exists <- function(token, payment_id) {
       limit = 1
     ),
     encode = "json",
-    httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- httr::status_code(res)
   
-  body_raw <- httr::content(res, as = "text", encoding = "UTF-8")
+  # 200 = found (duplicate)
+  if (status == 200) return(TRUE)
   
-  # Parse safely (never assume JSON)
-  body <- tryCatch(
-    jsonlite::fromJSON(body_raw, simplifyVector = FALSE),
-    error = function(e) NULL
-  )
+  # 401/404/500 = NOT FOUND (this is NORMAL for FileMaker)
+  if (status %in% c(401, 404, 500)) return(FALSE)
   
-  # ✅ Found → duplicate
-  if (status == 200) {
-    return(TRUE)
-  }
-  
-  # ✅ NOT FOUND → normal → proceed to insert
-  if (status %in% c(401, 404, 500)) {
-    return(FALSE)
-  }
-  
-  # ❌ Unexpected → log only, NEVER stop webhook
+  # unexpected but non-fatal
   message("❌ FileMaker _find unexpected status: ", status)
-  message(body_raw)
+  message(httr::content(res, as = "text"))
   
   FALSE
 }
 
 fm_insert_razor <- function(token, record) {
   
-  do_insert <- function(token) {
+  do_insert <- function(tok) {
     httr::POST(
       paste0(
         FM_HOST,
@@ -127,37 +128,36 @@ fm_insert_razor <- function(token, record) {
         FM_FILE,
         "/layouts/razor/records"
       ),
-      httr::add_headers(
-        Authorization = paste("Bearer", token),
+      add_headers(
+        Authorization = paste("Bearer", tok),
         "Content-Type" = "application/json"
       ),
       body = list(fieldData = record),
       encode = "json",
-      httr::config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+      config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
     )
   }
   
   res <- do_insert(token)
   
-  if (httr::status_code(res) == 200) return(TRUE)
+  if (status_code(res) == 200) return(TRUE)
   
   body <- httr::content(res, as = "parsed", simplifyVector = TRUE)
   
-  # 🔁 Token expired → relogin once
+  # Token expired → retry once
   if (!is.null(body$messages[[1]]$code) && body$messages[[1]]$code == "952") {
     message("🔁 FileMaker token expired — re-authenticating")
     .fm_token <<- NULL
     token <- fm_login()
     res <- do_insert(token)
-    
-    if (httr::status_code(res) == 200) return(TRUE)
+    if (status_code(res) == 200) return(TRUE)
   }
   
   stop("FileMaker insert failed: ", httr::content(res, as = "text"))
 }
 
 # =========================================================
-# Load MotherDuck data at startup (search only)
+# Load MotherDuck data (SEARCH ONLY)
 # =========================================================
 
 DATA <- NULL
@@ -248,7 +248,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 }
 
 # =========================================================
-# Razorpay Webhook (FAIL-SAFE)
+# Razorpay Webhook (FULLY FAIL-SAFE)
 # =========================================================
 
 #* @post /razorpay/webhook
@@ -281,27 +281,29 @@ function(req, res) {
     check_fm_env()
     token <- fm_login()
     
-    payment <- payload$payload$payment$entity
+    payment <- pluck(payload, "payload", "payment", "entity")
+    if (is.null(payment$id)) stop("Missing payment entity")
     
     if (!fm_payment_exists(token, payment$id)) {
       
-      safe <- function(x) if (is.null(x) || length(x) == 0) "" else x
-      
       record <- list(
-        payment_id = safe(payment$id),
-        order_id   = safe(payment$order_id),
-        `total payment amount` = as.numeric(payment$amount) / 100,
-        currency   = safe(payment$currency),
-        `payment status` = safe(payment$status),
-        student_name = safe(payment$notes$student_name),
-        admission_number = safe(payment$notes$admission_number),
-        branch = safe(payment$notes$branch),
-        email  = safe(payment$email),
-        phone  = as.character(safe(payment$contact))
+        payment_id = payment$id,
+        order_id   = payment$order_id %||% "",
+        `total payment amount` = as.numeric(payment$amount %||% 0) / 100,
+        currency   = payment$currency %||% "",
+        `payment status` = payment$status %||% "",
+        
+        student_name = pluck(payment, "notes", "student_name") %||% "",
+        admission_number = pluck(payment, "notes", "admission_number") %||% "",
+        branch = pluck(payment, "notes", "branch") %||% "",
+        
+        email = payment$email %||% "",
+        phone = as.character(payment$contact %||% "")
       )
       
       fm_insert_razor(token, record)
       message("✅ Payment inserted: ", payment$id)
+      
     } else {
       message("⚠️ Duplicate ignored: ", payment$id)
     }
