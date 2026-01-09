@@ -95,16 +95,17 @@ fm_payment_exists <- function(token, payment_id) {
   
   status <- httr::status_code(res)
   
-  if (status == 200) {
-    return(TRUE)      # duplicate payment
-  }
+  # ✅ record exists
+  if (status == 200) return(TRUE)
   
-  if (status == 401) {
-    return(FALSE)     # NEW payment — THIS IS NORMAL
-  }
+  # ✅ record does NOT exist (THIS IS NORMAL)
+  if (status == 401) return(FALSE)
   
-  # only real errors reach here
-  stop("FileMaker _find failed: ", httr::content(res, as = "text"))
+  # ❌ any other status is a real error
+  message("❌ FileMaker _find unexpected status: ", status)
+  message(httr::content(res, as = "text"))
+  
+  return(FALSE)
 }
 
 fm_insert_razor <- function(token, record) {
