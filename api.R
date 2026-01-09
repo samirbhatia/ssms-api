@@ -92,6 +92,12 @@ fm_payment_exists <- function(token, payment_id) {
   
   status <- httr::status_code(res)
   body   <- httr::content(res, as = "parsed", simplifyVector = TRUE)
+  # body_raw <- httr::content(res, as = "text", encoding = "UTF-8")
+  
+  body <- tryCatch(
+    jsonlite::fromJSON(body_raw, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
   
   # ✅ Record exists
   if (status == 200) return(TRUE)
@@ -99,7 +105,10 @@ fm_payment_exists <- function(token, payment_id) {
   # ✅ Record does NOT exist (FileMaker uses 401 or 500 🤦)
   if (
     status %in% c(401, 500) &&
-    !is.null(body$messages[[1]]$code) &&
+    !is.null(body) &&
+    is.list(body) &&
+    !is.null(body$messages) &&
+    length(body$messages) > 0 &&
     body$messages[[1]]$code == "401"
   ) {
     return(FALSE)
