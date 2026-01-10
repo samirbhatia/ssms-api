@@ -283,7 +283,13 @@ function(req, res) {
     token <- fm_login()
     
     payment <- safe_get(payload, c("payload", "payment", "entity"), NULL)
-    if (is.null(payment)) stop("Missing payment entity")
+    
+    # 🚨 HARD GUARD — fixes atomic vector crash forever
+    if (is.null(payment) || !is.list(payment)) {
+      message("⚠️ Invalid payment structure, skipping webhook")
+      res$status <- 200
+      return(list(status = "ignored"))
+    }
     
     payment_id <- safe_get(payment, c("id"))
     
