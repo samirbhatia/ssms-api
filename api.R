@@ -39,16 +39,17 @@ verify_razorpay_signature <- function(raw_body, received_sig) {
 }
 
 # =========================================================
-# Safe extract helpers (CRITICAL)
+# SAFE nested accessor (CRITICAL FIX)
 # =========================================================
 
-`%||%` <- function(a, b) if (is.null(a)) b else a
-
-pluck <- function(x, ...) {
-  tryCatch(
-    Reduce(function(a, b) if (is.list(a)) a[[b]] else NULL, list(x, ...)),
-    error = function(e) NULL
-  )
+safe_get <- function(x, path, default = "") {
+  tryCatch({
+    for (p in path) {
+      if (is.null(x) || !is.list(x)) return(default)
+      x <- x[[p]]
+    }
+    if (is.null(x) || length(x) == 0) default else x
+  }, error = function(e) default)
 }
 
 # =========================================================
@@ -79,7 +80,7 @@ fm_login <- function() {
   .fm_token
 }
 
-# ---- idempotency check ----
+# ---- Idempotency check (FileMaker _find) ----
 fm_payment_exists <- function(token, payment_id) {
   
   url <- paste0(
@@ -103,25 +104,26 @@ fm_payment_exists <- function(token, payment_id) {
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
-  status <- httr::status_code(res)
+  status <- status_code(res)
   
-  # 200 = found (duplicate)
+  # Found → duplicate
   if (status == 200) return(TRUE)
   
-  # 401/404/500 = NOT FOUND (this is NORMAL for FileMaker)
+  # Not found → normal
   if (status %in% c(401, 404, 500)) return(FALSE)
   
-  # unexpected but non-fatal
+  # Unexpected → log only
   message("❌ FileMaker _find unexpected status: ", status)
-  message(httr::content(res, as = "text"))
+  message(content(res, as = "text"))
   
   FALSE
 }
 
+# ---- Insert with token refresh ----
 fm_insert_razor <- function(token, record) {
   
-  do_insert <- function(tok) {
-    httr::POST(
+  do_insert <- function(token) {
+    POST(
       paste0(
         FM_HOST,
         "/fmi/data/vLatest/databases/",
@@ -129,7 +131,7 @@ fm_insert_razor <- function(token, record) {
         "/layouts/razor/records"
       ),
       add_headers(
-        Authorization = paste("Bearer", tok),
+        Authorization = paste("Bearer", token),
         "Content-Type" = "application/json"
       ),
       body = list(fieldData = record),
@@ -139,12 +141,11 @@ fm_insert_razor <- function(token, record) {
   }
   
   res <- do_insert(token)
-  
   if (status_code(res) == 200) return(TRUE)
   
-  body <- httr::content(res, as = "parsed", simplifyVector = TRUE)
+  body <- content(res, as = "parsed", simplifyVector = TRUE)
   
-  # Token expired → retry once
+  # Token expired → relogin once
   if (!is.null(body$messages[[1]]$code) && body$messages[[1]]$code == "952") {
     message("🔁 FileMaker token expired — re-authenticating")
     .fm_token <<- NULL
@@ -153,11 +154,11 @@ fm_insert_razor <- function(token, record) {
     if (status_code(res) == 200) return(TRUE)
   }
   
-  stop("FileMaker insert failed: ", httr::content(res, as = "text"))
+  stop("FileMaker insert failed: ", content(res, as = "text"))
 }
 
 # =========================================================
-# Load MotherDuck data (SEARCH ONLY)
+# Load MotherDuck data (search only)
 # =========================================================
 
 DATA <- NULL
@@ -215,7 +216,7 @@ function() {
 }
 
 # =========================================================
-# Search API (WEBSITE)
+# Search API (website)
 # =========================================================
 
 #* @get /search
@@ -248,7 +249,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 }
 
 # =========================================================
-# Razorpay Webhook (FULLY FAIL-SAFE)
+# Razorpay Webhook (FAIL-SAFE & HARDENED)
 # =========================================================
 
 #* @post /razorpay/webhook
@@ -272,7 +273,7 @@ function(req, res) {
   
   payload <- fromJSON(raw_body, simplifyVector = FALSE)
   
-  if (payload$event != "payment.captured") {
+  if (safe_get(payload, c("event")) != "payment.captured") {
     return(list(status = "ignored"))
   }
   
@@ -281,31 +282,31 @@ function(req, res) {
     check_fm_env()
     token <- fm_login()
     
-    payment <- pluck(payload, "payload", "payment", "entity")
-    if (is.null(payment$id)) stop("Missing payment entity")
+    payment <- safe_get(payload, c("payload", "payment", "entity"), NULL)
+    if (is.null(payment)) stop("Missing payment entity")
     
-    if (!fm_payment_exists(token, payment$id)) {
+    payment_id <- safe_get(payment, c("id"))
+    
+    if (!fm_payment_exists(token, payment_id)) {
       
       record <- list(
-        payment_id = payment$id,
-        order_id   = payment$order_id %||% "",
-        `total payment amount` = as.numeric(payment$amount %||% 0) / 100,
-        currency   = payment$currency %||% "",
-        `payment status` = payment$status %||% "",
-        
-        student_name = pluck(payment, "notes", "student_name") %||% "",
-        admission_number = pluck(payment, "notes", "admission_number") %||% "",
-        branch = pluck(payment, "notes", "branch") %||% "",
-        
-        email = payment$email %||% "",
-        phone = as.character(payment$contact %||% "")
+        payment_id = payment_id,
+        order_id   = safe_get(payment, c("order_id")),
+        `total payment amount` = as.numeric(safe_get(payment, c("amount"), 0)) / 100,
+        currency   = safe_get(payment, c("currency")),
+        `payment status` = safe_get(payment, c("status")),
+        student_name     = safe_get(payment, c("notes", "student_name")),
+        admission_number = safe_get(payment, c("notes", "admission_number")),
+        branch           = safe_get(payment, c("notes", "branch")),
+        email            = safe_get(payment, c("email")),
+        phone            = as.character(safe_get(payment, c("contact")))
       )
       
       fm_insert_razor(token, record)
-      message("✅ Payment inserted: ", payment$id)
+      message("✅ Payment inserted: ", payment_id)
       
     } else {
-      message("⚠️ Duplicate ignored: ", payment$id)
+      message("⚠️ Duplicate ignored: ", payment_id)
     }
     
   }, error = function(e) {
