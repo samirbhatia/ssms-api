@@ -258,6 +258,12 @@ function(req, res) {
   
   message("🔥 Razorpay webhook hit")
   
+  if (!is.character(req$postBody)) {
+    message("⚠️ Non-character request body, ignoring")
+    res$status <- 200
+    return(list(status = "ignored"))
+  }
+  
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
   raw_body <- req$postBody
   
@@ -271,9 +277,28 @@ function(req, res) {
     return(list(status = "invalid-signature"))
   }
   
-  payload <- fromJSON(raw_body, simplifyVector = FALSE)
+  payload <- tryCatch(
+    jsonlite::fromJSON(raw_body, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
   
-  if (safe_get(payload, c("event")) != "payment.captured") {
+  # 🚨 HARD GUARD #1 — payload must be a list
+  if (is.null(payload) || !is.list(payload)) {
+    message("⚠️ Invalid JSON payload, ignoring webhook")
+    res$status <- 200
+    return(list(status = "ignored"))
+  }
+  
+  # 🚨 HARD GUARD #2 — event must exist and be character
+  event <- payload[["event"]]
+  
+  if (!is.character(event) || length(event) != 1) {
+    message("⚠️ Missing/invalid event field, ignoring webhook")
+    res$status <- 200
+    return(list(status = "ignored"))
+  }
+  
+  if (event != "payment.captured") {
     return(list(status = "ignored"))
   }
   
