@@ -42,14 +42,13 @@ verify_razorpay_signature <- function(raw_body, received_sig) {
 # SAFE nested accessor (CRITICAL FIX)
 # =========================================================
 
-safe_get <- function(x, path, default = "") {
-  tryCatch({
-    for (p in path) {
-      if (is.null(x) || !is.list(x)) return(default)
-      x <- x[[p]]
-    }
-    if (is.null(x) || length(x) == 0) default else x
-  }, error = function(e) default)
+safe_get <- function(x, path, default = NULL) {
+  for (p in path) {
+    if (!is.list(x)) return(default)
+    if (!p %in% names(x)) return(default)
+    x <- x[[p]]
+  }
+  x
 }
 
 # =========================================================
@@ -344,6 +343,11 @@ function(req, res) {
     message("❌ Webhook processing error: ", e$message)
   })
   
+  if (!is.list(payload)) {
+    message("⚠️ Payload not a list, ignoring")
+    res$status <- 200
+    return(list(status = "ignored"))
+  }
   res$status <- 200
   list(status = "ok")
 }
