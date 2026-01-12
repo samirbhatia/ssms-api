@@ -39,7 +39,7 @@ verify_razorpay_signature <- function(raw_body, received_sig) {
 }
 
 # =========================================================
-# SAFE nested accessor (CRITICAL FIX)
+# SAFE nested accessor (NO $ EVER)
 # =========================================================
 
 safe_get <- function(x, path, default = NULL) {
@@ -60,13 +60,8 @@ safe_get <- function(x, path, default = NULL) {
 fm_login <- function() {
   if (!is.null(.fm_token)) return(.fm_token)
   
-  res <- httr::POST(
-    paste0(
-      FM_HOST,
-      "/fmi/data/vLatest/databases/",
-      FM_FILE,
-      "/sessions"
-    ),
+  res <- POST(
+    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/sessions"),
     authenticate(FM_USER, FM_PASSWORD),
     add_headers("Content-Type" = "application/json"),
     body = "{}",
@@ -74,23 +69,22 @@ fm_login <- function() {
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
-  httr::stop_for_status(res)
-  .fm_token <<- content(res)$response$token
-  .fm_token
+  stop_for_status(res)
+  
+  parsed <- content(res, as = "parsed", simplifyVector = FALSE)
+  token  <- safe_get(parsed, c("response", "token"))
+  
+  if (!is.character(token)) stop("Failed to obtain FileMaker token")
+  
+  .fm_token <<- token
+  token
 }
 
-# ---- Idempotency check (FileMaker _find) ----
+# ---- Idempotency check ----
 fm_payment_exists <- function(token, payment_id) {
   
-  url <- paste0(
-    FM_HOST,
-    "/fmi/data/vLatest/databases/",
-    FM_FILE,
-    "/layouts/razor/_find"
-  )
-  
-  res <- httr::POST(
-    url,
+  res <- POST(
+    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/_find"),
     add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
@@ -105,32 +99,21 @@ fm_payment_exists <- function(token, payment_id) {
   
   status <- status_code(res)
   
-  # Found → duplicate
   if (status == 200) return(TRUE)
-  
-  # Not found → normal
   if (status %in% c(401, 404, 500)) return(FALSE)
   
-  # Unexpected → log only
   message("❌ FileMaker _find unexpected status: ", status)
-  message(content(res, as = "text"))
-  
   FALSE
 }
 
 # ---- Insert with token refresh ----
 fm_insert_razor <- function(token, record) {
   
-  do_insert <- function(token) {
+  do_insert <- function(tok) {
     POST(
-      paste0(
-        FM_HOST,
-        "/fmi/data/vLatest/databases/",
-        FM_FILE,
-        "/layouts/razor/records"
-      ),
+      paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
       add_headers(
-        Authorization = paste("Bearer", token),
+        Authorization = paste("Bearer", tok),
         "Content-Type" = "application/json"
       ),
       body = list(fieldData = record),
@@ -142,10 +125,12 @@ fm_insert_razor <- function(token, record) {
   res <- do_insert(token)
   if (status_code(res) == 200) return(TRUE)
   
-  body <- content(res, as = "parsed", simplifyVector = TRUE)
+  body_raw <- content(res, as = "text", encoding = "UTF-8")
+  body     <- tryCatch(fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
   
-  # Token expired → relogin once
-  if (!is.null(body$messages[[1]]$code) && body$messages[[1]]$code == "952") {
+  code <- safe_get(body, c("messages", "1", "code"))
+  
+  if (identical(code, "952")) {
     message("🔁 FileMaker token expired — re-authenticating")
     .fm_token <<- NULL
     token <- fm_login()
@@ -153,11 +138,11 @@ fm_insert_razor <- function(token, record) {
     if (status_code(res) == 200) return(TRUE)
   }
   
-  stop("FileMaker insert failed: ", content(res, as = "text"))
+  stop("FileMaker insert failed: ", body_raw)
 }
 
 # =========================================================
-# Load MotherDuck data (search only)
+# Load MotherDuck data
 # =========================================================
 
 DATA <- NULL
@@ -165,15 +150,12 @@ DATA <- NULL
 load_data <- function() {
   tryCatch({
     message("➡️ Loading MotherDuck data")
-    
     con <- dbConnect(duckdb(), dbdir = ":memory:")
     dbExecute(con, "INSTALL motherduck;")
     dbExecute(con, "LOAD motherduck;")
     dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
-    
     df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
     dbDisconnect(con, shutdown = TRUE)
-    
     message("🎉 Loaded ", nrow(df), " rows")
     df
   }, error = function(e) {
@@ -208,20 +190,14 @@ function(req, res) {
 
 #* @get /health
 function() {
-  list(
-    status = "ok",
-    rows = if (is.data.frame(DATA)) nrow(DATA) else NA
-  )
+  list(status = "ok", rows = if (is.data.frame(DATA)) nrow(DATA) else NA)
 }
 
 # =========================================================
-# Search API (website)
+# Search
 # =========================================================
 
 #* @get /search
-#* @param name
-#* @param admission
-#* @param school
 function(name = "", admission = "", school = "Janakpuri", res) {
   
   if (!is.data.frame(DATA)) {
@@ -238,17 +214,15 @@ function(name = "", admission = "", school = "Janakpuri", res) {
   adm <- tolower(trimws(admission))
   sch <- tolower(trimws(school))
   
-  df <- DATA[
+  head(DATA[
     grepl(nm, tolower(DATA$student_name), fixed = TRUE) &
       grepl(adm, tolower(DATA$admission_number), fixed = TRUE) &
       tolower(trimws(DATA$school_full)) == sch,
-  ]
-  
-  head(df, 50)
+  ], 50)
 }
 
 # =========================================================
-# Razorpay Webhook (FAIL-SAFE & HARDENED)
+# Razorpay Webhook (ABSOLUTELY SAFE)
 # =========================================================
 
 #* @post /razorpay/webhook
@@ -258,46 +232,33 @@ function(req, res) {
   message("🔥 Razorpay webhook hit")
   
   if (!is.character(req$postBody)) {
-    message("⚠️ Non-character request body, ignoring")
     res$status <- 200
     return(list(status = "ignored"))
   }
   
   sig <- req$HTTP_X_RAZORPAY_SIGNATURE
-  raw_body <- req$postBody
+  raw <- req$postBody
   
-  if (is.null(sig) || is.null(raw_body) || raw_body == "") {
+  if (!is.character(sig) || raw == "") {
     res$status <- 200
     return(list(status = "ignored"))
   }
   
-  if (!verify_razorpay_signature(raw_body, sig)) {
+  if (!verify_razorpay_signature(raw, sig)) {
     res$status <- 200
     return(list(status = "invalid-signature"))
   }
   
-  payload <- tryCatch(
-    jsonlite::fromJSON(raw_body, simplifyVector = FALSE),
-    error = function(e) NULL
-  )
+  payload <- tryCatch(fromJSON(raw, simplifyVector = FALSE), error = function(e) NULL)
   
-  # 🚨 HARD GUARD #1 — payload must be a list
-  if (is.null(payload) || !is.list(payload)) {
-    message("⚠️ Invalid JSON payload, ignoring webhook")
+  if (!is.list(payload)) {
     res$status <- 200
     return(list(status = "ignored"))
   }
   
-  # 🚨 HARD GUARD #2 — event must exist and be character
-  event <- payload[["event"]]
-  
-  if (!is.character(event) || length(event) != 1) {
-    message("⚠️ Missing/invalid event field, ignoring webhook")
+  event <- safe_get(payload, c("event"))
+  if (!identical(event, "payment.captured")) {
     res$status <- 200
-    return(list(status = "ignored"))
-  }
-  
-  if (event != "payment.captured") {
     return(list(status = "ignored"))
   }
   
@@ -306,16 +267,11 @@ function(req, res) {
     check_fm_env()
     token <- fm_login()
     
-    payment <- safe_get(payload, c("payload", "payment", "entity"), NULL)
-    
-    # 🚨 HARD GUARD — fixes atomic vector crash forever
-    if (is.null(payment) || !is.list(payment)) {
-      message("⚠️ Invalid payment structure, skipping webhook")
-      res$status <- 200
-      return(list(status = "ignored"))
-    }
+    payment <- safe_get(payload, c("payload", "payment", "entity"))
+    if (!is.list(payment)) return()
     
     payment_id <- safe_get(payment, c("id"))
+    if (!is.character(payment_id)) return()
     
     if (!fm_payment_exists(token, payment_id)) {
       
@@ -343,11 +299,6 @@ function(req, res) {
     message("❌ Webhook processing error: ", e$message)
   })
   
-  if (!is.list(payload)) {
-    message("⚠️ Payload not a list, ignoring")
-    res$status <- 200
-    return(list(status = "ignored"))
-  }
   res$status <- 200
   list(status = "ok")
 }
