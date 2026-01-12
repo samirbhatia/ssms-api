@@ -126,10 +126,15 @@ fm_insert_razor <- function(token, record) {
   if (status_code(res) == 200) return(TRUE)
   
   body_raw <- content(res, as = "text", encoding = "UTF-8")
-  body     <- tryCatch(fromJSON(body_raw, simplifyVector = FALSE), error = function(e) NULL)
   
-  code <- safe_get(body, c("messages", "1", "code"))
+  parsed <- tryCatch(
+    jsonlite::fromJSON(body_raw, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
   
+  code <- safe_get(parsed, c("messages", "1", "code"))
+  
+  # 🔁 Token expired → retry ONCE
   if (identical(code, "952")) {
     message("🔁 FileMaker token expired — re-authenticating")
     .fm_token <<- NULL
