@@ -111,7 +111,12 @@ fm_insert_razor <- function(token, record) {
   
   do_insert <- function(tok) {
     POST(
-      paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
+      paste0(
+        FM_HOST,
+        "/fmi/data/vLatest/databases/",
+        FM_FILE,
+        "/layouts/razor/records"
+      ),
       add_headers(
         Authorization = paste("Bearer", tok),
         "Content-Type" = "application/json"
@@ -134,15 +139,18 @@ fm_insert_razor <- function(token, record) {
   
   code <- safe_get(parsed, c("messages", "1", "code"))
   
-  # 🔁 Token expired → retry ONCE
+  # 🔁 HARD RESET on token expiry
   if (identical(code, "952")) {
-    message("🔁 FileMaker token expired — re-authenticating")
-    .fm_token <<- NULL
-    token <- fm_login()
-    res <- do_insert(token)
+    message("🔁 FileMaker token expired — full re-auth")
+    
+    .fm_token <<- NULL        # DROP cached token
+    token <- fm_login()       # fresh login
+    
+    res <- do_insert(token)   # retry ONCE
     if (status_code(res) == 200) return(TRUE)
   }
   
+  # If we reach here, fail loudly but safely
   stop("FileMaker insert failed: ", body_raw)
 }
 
