@@ -6,7 +6,7 @@ library(digest)
 library(httr)
 
 # =========================================================
-# Environment
+# Environment (DO NOT FAIL AT LOAD TIME)
 # =========================================================
 
 FM_HOST     <- Sys.getenv("FM_HOST")
@@ -39,7 +39,7 @@ verify_razorpay_signature <- function(raw_body, received_sig) {
 }
 
 # =========================================================
-# Safe accessor
+# SAFE nested accessor (NO $ EVER)
 # =========================================================
 
 safe_get <- function(x, path, default = NULL) {
@@ -55,7 +55,11 @@ safe_get <- function(x, path, default = NULL) {
 # FileMaker helpers
 # =========================================================
 
+.fm_token <- NULL
+
 fm_login <- function() {
+  if (!is.null(.fm_token)) return(.fm_token)
+  
   res <- POST(
     paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/sessions"),
     authenticate(FM_USER, FM_PASSWORD),
@@ -66,22 +70,28 @@ fm_login <- function() {
   )
   
   stop_for_status(res)
-  content(res)$response$token
+  .fm_token <<- content(res)$response$token
+  .fm_token
 }
 
 fm_payment_exists <- function(token, payment_id) {
+  
   res <- POST(
     paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/_find"),
     add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
     ),
-    body = list(query = list(list(payment_id = payment_id)), limit = 1),
+    body = list(
+      query = list(list(payment_id = payment_id)),
+      limit = 1
+    ),
     encode = "json",
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
   status <- status_code(res)
+  
   if (status == 200) return(TRUE)
   if (status %in% c(401, 404, 500)) return(FALSE)
   
@@ -89,23 +99,126 @@ fm_payment_exists <- function(token, payment_id) {
   FALSE
 }
 
-fm_insert_razor <- function(record) {
-  token <- fm_login()
+fm_insert_razor <- function(token, record) {
   
-  res <- POST(
-    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
-    add_headers(
-      Authorization = paste("Bearer", token),
-      "Content-Type" = "application/json"
-    ),
-    body = list(fieldData = record),
-    encode = "json",
-    config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
-  )
+  do_insert <- function(token) {
+    POST(
+      paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
+      add_headers(
+        Authorization = paste("Bearer", token),
+        "Content-Type" = "application/json"
+      ),
+      body = list(fieldData = record),
+      encode = "json",
+      config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
+    )
+  }
   
+  res <- do_insert(token)
   if (status_code(res) == 200) return(TRUE)
   
+  body <- content(res, as = "parsed", simplifyVector = TRUE)
+  
+  if (!is.null(body$messages[[1]]$code) && body$messages[[1]]$code == "952") {
+    message("🔁 FileMaker token expired — re-authenticating")
+    .fm_token <<- NULL
+    token <- fm_login()
+    res <- do_insert(token)
+    if (status_code(res) == 200) return(TRUE)
+  }
+  
   stop("FileMaker insert failed: ", content(res, as = "text"))
+}
+
+# =========================================================
+# Load MotherDuck data
+# =========================================================
+
+DATA <- NULL
+
+load_data <- function() {
+  tryCatch({
+    message("➡️ Loading MotherDuck data")
+    
+    con <- dbConnect(duckdb(), dbdir = ":memory:")
+    dbExecute(con, "INSTALL motherduck;")
+    dbExecute(con, "LOAD motherduck;")
+    dbExecute(con, "ATTACH 'md:ssms_school' AS ssms")
+    
+    df <- dbGetQuery(con, "SELECT * FROM ssms.vw_balances")
+    dbDisconnect(con, shutdown = TRUE)
+    
+    message("🎉 Loaded ", nrow(df), " rows")
+    df
+  }, error = function(e) {
+    message("❌ load_data failed: ", e$message)
+    NULL
+  })
+}
+
+DATA <- load_data()
+
+# =========================================================
+# CORS
+# =========================================================
+
+#* @filter cors
+function(req, res) {
+  res$setHeader("Access-Control-Allow-Origin", "*")
+  res$setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+  res$setHeader("Access-Control-Allow-Headers", "Content-Type, X-Razorpay-Signature")
+  
+  if (req$REQUEST_METHOD == "OPTIONS") {
+    res$status <- 200
+    return(list())
+  }
+  
+  plumber::forward()
+}
+
+# =========================================================
+# Health
+# =========================================================
+
+#* @get /health
+function() {
+  list(
+    status = "ok",
+    rows = if (is.data.frame(DATA)) nrow(DATA) else NA
+  )
+}
+
+# =========================================================
+# Search API
+# =========================================================
+
+#* @get /search
+#* @param name
+#* @param admission
+#* @param school
+function(name = "", admission = "", school = "Janakpuri", res) {
+  
+  if (!is.data.frame(DATA)) {
+    res$status <- 500
+    return(list(error = "DATA not loaded"))
+  }
+  
+  if (nchar(name) < 3 || nchar(admission) < 3) {
+    res$status <- 400
+    return(list(error = "Enter at least 3 characters"))
+  }
+  
+  nm  <- tolower(trimws(name))
+  adm <- tolower(trimws(admission))
+  sch <- tolower(trimws(school))
+  
+  df <- DATA[
+    grepl(nm, tolower(DATA$student_name), fixed = TRUE) &
+      grepl(adm, tolower(DATA$admission_number), fixed = TRUE) &
+      tolower(trimws(DATA$school_full)) == sch,
+  ]
+  
+  head(df, 50)
 }
 
 # =========================================================
@@ -136,19 +249,26 @@ function(req, res) {
     return(list(status = "invalid-signature"))
   }
   
-  payload <- tryCatch(fromJSON(raw, simplifyVector = FALSE), error = function(e) NULL)
+  payload <- tryCatch(
+    fromJSON(raw, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  
   if (!is.list(payload)) {
     res$status <- 200
     return(list(status = "ignored"))
   }
   
-  if (!identical(safe_get(payload, c("event")), "payment.captured")) {
+  event <- safe_get(payload, c("event"))
+  if (!identical(event, "payment.captured")) {
     res$status <- 200
     return(list(status = "ignored"))
   }
   
   tryCatch({
+    
     check_fm_env()
+    token <- fm_login()
     
     payment <- safe_get(payload, c("payload", "payment", "entity"))
     if (!is.list(payment)) return()
@@ -156,9 +276,8 @@ function(req, res) {
     payment_id <- safe_get(payment, c("id"))
     if (!is.character(payment_id)) return()
     
-    token <- fm_login()
-    
     if (!fm_payment_exists(token, payment_id)) {
+      
       record <- list(
         payment_id = payment_id,
         order_id   = safe_get(payment, c("order_id")),
@@ -172,8 +291,9 @@ function(req, res) {
         phone            = as.character(safe_get(payment, c("contact")))
       )
       
-      fm_insert_razor(record)
+      fm_insert_razor(token, record)
       message("✅ Payment inserted: ", payment_id)
+      
     } else {
       message("⚠️ Duplicate ignored: ", payment_id)
     }
