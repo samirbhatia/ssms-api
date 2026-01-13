@@ -58,10 +58,14 @@ safe_get <- function(x, path, default = NULL) {
 .fm_token <- NULL
 
 fm_login <- function() {
-  if (!is.null(.fm_token)) return(.fm_token)
   
   res <- POST(
-    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/sessions"),
+    paste0(
+      FM_HOST,
+      "/fmi/data/vLatest/databases/",
+      FM_FILE,
+      "/sessions"
+    ),
     authenticate(FM_USER, FM_PASSWORD),
     add_headers("Content-Type" = "application/json"),
     body = "{}",
@@ -69,9 +73,20 @@ fm_login <- function() {
     config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
   )
   
-  stop_for_status(res)
-  .fm_token <<- content(res)$response$token
-  .fm_token
+  txt <- content(res, as = "text", encoding = "UTF-8")
+  
+  parsed <- tryCatch(
+    jsonlite::fromJSON(txt, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  
+  token <- safe_get(parsed, c("response", "token"))
+  
+  if (!is.character(token)) {
+    stop("FileMaker login failed: ", txt)
+  }
+  
+  token
 }
 
 fm_payment_exists <- function(token, payment_id) {
