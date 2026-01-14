@@ -70,7 +70,6 @@ fm_login <- function() {
 }
 
 fm_payment_exists <- function(token, payment_id) {
-  
   res <- POST(
     paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/_find"),
     add_headers(
@@ -86,7 +85,6 @@ fm_payment_exists <- function(token, payment_id) {
   )
   
   status <- status_code(res)
-  
   if (status == 200) return(TRUE)
   if (status %in% c(401, 404, 500)) return(FALSE)
   
@@ -95,8 +93,7 @@ fm_payment_exists <- function(token, payment_id) {
 }
 
 fm_insert_razor <- function(record) {
-  
-  token <- fm_login()   # fresh token every insert
+  token <- fm_login()
   
   res <- POST(
     paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
@@ -247,37 +244,36 @@ function(req, res) {
     if (!is.character(payment_id)) return()
     
     token <- fm_login()
-    
-    if (!fm_payment_exists(token, payment_id)) {
-      
-      amount_paise <- as.numeric(safe_get(payment, c("amount"), 0))
-      fee_paise    <- as.numeric(safe_get(payment, c("fee"), 0))
-      tax_paise    <- as.numeric(safe_get(payment, c("tax"), 0))
-      
-      net_paise <- amount_paise - fee_paise - tax_paise
-      
-      record <- list(
-        payment_id = payment_id,
-        order_id   = safe_get(payment, c("order_id")),
-        
-        `gross amount`        = amount_paise / 100,
-        `razorpay fee`        = fee_paise / 100,
-        `gst on fee`          = tax_paise / 100,
-        `net amount received` = net_paise / 100,
-        
-        currency        = safe_get(payment, c("currency")),
-        `payment status`= safe_get(payment, c("status")),
-        
-        student_name     = safe_get(payment, c("notes", "student_name")),
-        admission_number = safe_get(payment, c("notes", "admission_number")),
-        branch           = safe_get(payment, c("notes", "branch")),
-        email            = safe_get(payment, c("email")),
-        phone            = as.character(safe_get(payment, c("contact")))
-      )
-      
-      fm_insert_razor(record)
-      message("✅ Payment inserted: ", payment_id)
+    if (fm_payment_exists(token, payment_id)) {
+      message("⚠️ Duplicate ignored: ", payment_id)
+      return()
     }
+    
+    # Amounts (paise → INR)
+    gross_amount <- as.numeric(safe_get(payment, c("amount"), 0)) / 100
+    fee          <- as.numeric(safe_get(payment, c("fee"), 0)) / 100
+    tax          <- as.numeric(safe_get(payment, c("tax"), 0)) / 100
+    net_amount   <- gross_amount - fee - tax
+    
+    record <- list(
+      payment_id            = payment_id,
+      order_id              = safe_get(payment, c("order_id")),
+      `gross amount`        = gross_amount,
+      `razorpay fee`        = fee,
+      `gst on fee`          = tax,
+      `net amount received`= net_amount,
+      currency              = safe_get(payment, c("currency")),
+      `payment status`      = safe_get(payment, c("status")),
+      settlement_id         = safe_get(payment, c("settlement_id")),
+      student_name          = safe_get(payment, c("notes", "student_name")),
+      admission_number      = safe_get(payment, c("notes", "admission_number")),
+      branch                = safe_get(payment, c("notes", "branch")),
+      email                 = safe_get(payment, c("email")),
+      phone                 = as.character(safe_get(payment, c("contact")))
+    )
+    
+    fm_insert_razor(record)
+    message("✅ Payment inserted: ", payment_id)
     
   }, error = function(e) {
     message("❌ Webhook processing error: ", e$message)
