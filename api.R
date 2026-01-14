@@ -6,7 +6,7 @@ library(digest)
 library(httr)
 
 # =========================================================
-# Environment
+# Environment (DO NOT STOP AT LOAD TIME)
 # =========================================================
 
 FM_HOST     <- Sys.getenv("FM_HOST")
@@ -52,12 +52,26 @@ safe_get <- function(x, path, default = NULL) {
 }
 
 # =========================================================
+# NUMERIC COERCION (CRITICAL FOR FILEMAKER NUMBER FIELDS)
+# =========================================================
+
+num0 <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  if (is.na(x)) 0 else x
+}
+
+# =========================================================
 # FileMaker helpers
 # =========================================================
 
 fm_login <- function() {
   res <- POST(
-    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/sessions"),
+    paste0(
+      FM_HOST,
+      "/fmi/data/vLatest/databases/",
+      FM_FILE,
+      "/sessions"
+    ),
     authenticate(FM_USER, FM_PASSWORD),
     add_headers("Content-Type" = "application/json"),
     body = "{}",
@@ -69,9 +83,16 @@ fm_login <- function() {
   content(res)$response$token
 }
 
+# ---- Idempotency check ----
 fm_payment_exists <- function(token, payment_id) {
+  
   res <- POST(
-    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/_find"),
+    paste0(
+      FM_HOST,
+      "/fmi/data/vLatest/databases/",
+      FM_FILE,
+      "/layouts/razor/_find"
+    ),
     add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
@@ -85,6 +106,7 @@ fm_payment_exists <- function(token, payment_id) {
   )
   
   status <- status_code(res)
+  
   if (status == 200) return(TRUE)
   if (status %in% c(401, 404, 500)) return(FALSE)
   
@@ -92,11 +114,18 @@ fm_payment_exists <- function(token, payment_id) {
   FALSE
 }
 
+# ---- Insert (fresh token each time = avoids 952) ----
 fm_insert_razor <- function(record) {
+  
   token <- fm_login()
   
   res <- POST(
-    paste0(FM_HOST, "/fmi/data/vLatest/databases/", FM_FILE, "/layouts/razor/records"),
+    paste0(
+      FM_HOST,
+      "/fmi/data/vLatest/databases/",
+      FM_FILE,
+      "/layouts/razor/records"
+    ),
     add_headers(
       Authorization = paste("Bearer", token),
       "Content-Type" = "application/json"
@@ -163,11 +192,14 @@ function(req, res) {
 
 #* @get /health
 function() {
-  list(status = "ok", rows = if (is.data.frame(DATA)) nrow(DATA) else NA)
+  list(
+    status = "ok",
+    rows = if (is.data.frame(DATA)) nrow(DATA) else NA
+  )
 }
 
 # =========================================================
-# Search
+# Search API
 # =========================================================
 
 #* @get /search
@@ -195,7 +227,7 @@ function(name = "", admission = "", school = "Janakpuri", res) {
 }
 
 # =========================================================
-# Razorpay Webhook
+# Razorpay Webhook (HARDENED & FINAL)
 # =========================================================
 
 #* @post /razorpay/webhook
@@ -222,13 +254,18 @@ function(req, res) {
     return(list(status = "invalid-signature"))
   }
   
-  payload <- tryCatch(fromJSON(raw, simplifyVector = FALSE), error = function(e) NULL)
+  payload <- tryCatch(
+    fromJSON(raw, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  
   if (!is.list(payload)) {
     res$status <- 200
     return(list(status = "ignored"))
   }
   
-  if (!identical(safe_get(payload, c("event")), "payment.captured")) {
+  event <- safe_get(payload, c("event"))
+  if (!identical(event, "payment.captured")) {
     res$status <- 200
     return(list(status = "ignored"))
   }
@@ -244,36 +281,40 @@ function(req, res) {
     if (!is.character(payment_id)) return()
     
     token <- fm_login()
-    if (fm_payment_exists(token, payment_id)) {
+    
+    if (!fm_payment_exists(token, payment_id)) {
+      
+      gross_amount <- num0(safe_get(payment, c("amount"))) / 100
+      fee_amount   <- num0(safe_get(payment, c("fee"))) / 100
+      tax_amount   <- num0(safe_get(payment, c("tax"))) / 100
+      net_amount   <- gross_amount - fee_amount - tax_amount
+      
+      record <- list(
+        payment_id            = payment_id,
+        order_id              = safe_get(payment, c("order_id")),
+        currency              = safe_get(payment, c("currency")),
+        `payment status`      = safe_get(payment, c("status")),
+        
+        `gross amount`        = gross_amount,
+        `razorpay fee`        = fee_amount,
+        `razorpay tax`        = tax_amount,
+        `net amount received` = net_amount,
+        
+        settlement_id         = safe_get(payment, c("settlement_id")),
+        
+        student_name          = safe_get(payment, c("notes", "student_name")),
+        admission_number      = safe_get(payment, c("notes", "admission_number")),
+        branch                = safe_get(payment, c("notes", "branch")),
+        email                 = safe_get(payment, c("email")),
+        phone                 = as.character(safe_get(payment, c("contact")))
+      )
+      
+      fm_insert_razor(record)
+      message("✅ Payment inserted: ", payment_id)
+      
+    } else {
       message("⚠️ Duplicate ignored: ", payment_id)
-      return()
     }
-    
-    # Amounts (paise → INR)
-    gross_amount <- as.numeric(safe_get(payment, c("amount"), 0)) / 100
-    fee          <- as.numeric(safe_get(payment, c("fee"), 0)) / 100
-    tax          <- as.numeric(safe_get(payment, c("tax"), 0)) / 100
-    net_amount   <- gross_amount - fee - tax
-    
-    record <- list(
-      payment_id            = payment_id,
-      order_id              = safe_get(payment, c("order_id")),
-      `gross amount`        = gross_amount,
-      `razorpay fee`        = fee,
-      `gst on fee`          = tax,
-      `net amount received`= net_amount,
-      currency              = safe_get(payment, c("currency")),
-      `payment status`      = safe_get(payment, c("status")),
-      settlement_id         = safe_get(payment, c("settlement_id")),
-      student_name          = safe_get(payment, c("notes", "student_name")),
-      admission_number      = safe_get(payment, c("notes", "admission_number")),
-      branch                = safe_get(payment, c("notes", "branch")),
-      email                 = safe_get(payment, c("email")),
-      phone                 = as.character(safe_get(payment, c("contact")))
-    )
-    
-    fm_insert_razor(record)
-    message("✅ Payment inserted: ", payment_id)
     
   }, error = function(e) {
     message("❌ Webhook processing error: ", e$message)
