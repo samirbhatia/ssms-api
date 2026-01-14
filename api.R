@@ -255,22 +255,35 @@ function(req, res) {
     net_amount   <- gross_amount - fee_amount - gst_amount
     
     record <- list(
-      payment_id            = payment_id,
-      order_id              = safe_get(payment, c("order_id")),
-      currency              = safe_get(payment, c("currency")),
-      payment_status        = safe_get(payment, c("status")),
-      student_name          = safe_get(payment, c("notes", "student_name")),
-      admission_number      = safe_get(payment, c("notes", "admission_number")),
-      branch                = safe_get(payment, c("notes", "branch")),
-      email                 = safe_get(payment, c("email")),
-      phone                 = as.character(safe_get(payment, c("contact"))),
+      # Core Razorpay identifiers
+      payment_id       = payment_id,
+      order_id         = safe_get(payment, c("order_id")),
+      currency         = safe_get(payment, c("currency")),
+      payment_status   = safe_get(payment, c("status")),
       
-      `gross amount`        = gross_amount,
-      `razorpay fee`        = fee_amount,
-      `gst on fee`          = gst_amount,
-      `net amount received`= net_amount,
+      # Student info
+      student_name     = safe_get(payment, c("notes", "student_name"), ""),
+      admission_number = safe_get(payment, c("notes", "admission_number"), ""),
+      branch           = safe_get(payment, c("notes", "branch"), ""),
+      email            = safe_get(payment, c("email"), ""),
+      phone            = as.character(safe_get(payment, c("contact"), "")),
       
-      settlement_id         = safe_get(payment, c("settlement_id"), "")
+      # Amounts (Number fields)
+      `gross amount`         = gross_amount,
+      `razorpay fee`         = fee_amount,
+      `gst on fee`           = gst_amount,
+      `net amount received` = net_amount,
+      
+      # Settlement (may be blank)
+      settlement_id          = safe_get(payment, c("settlement_id"), ""),
+      
+      # ---- REQUIRED LEGACY LAYOUT FIELDS ----
+      `payment page id`      = "",
+      `payment page title`   = "",
+      `item name`            = "Online Fee Payment",
+      `item quantity`        = "1",
+      `item amount`          = gross_amount,
+      `item payment amount`  = gross_amount
     )
     
     fm_insert_razor(record)
