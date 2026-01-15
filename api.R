@@ -87,6 +87,9 @@ fm_payment_exists <- function(token, payment_id) {
   status_code(res) == 200
 }
 
+base::message("📦 Record payload:")
+print(record)
+
 fm_insert <- function(record) {
   token <- fm_login()
   res <- POST(
