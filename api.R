@@ -224,7 +224,7 @@ function(req, res) {
     gross_amount <- num(safe_get(payment, c("amount"))) / 100
     fee          <- num(safe_get(payment, c("fee"))) / 100
     tax          <- num(safe_get(payment, c("tax"))) / 100
-    net_amount   <- gross_amount - fee - tax
+    net_amount   <- gross_amount - fee
     
     record <- list(
       payment_id             = payment_id,
@@ -236,11 +236,15 @@ function(req, res) {
       branch                 = safe_get(payment, c("notes", "branch")),
       email                  = safe_get(payment, c("email")),
       phone                  = as.character(safe_get(payment, c("contact"))),
+      
+      # amounts
       `gross amount`         = gross_amount,
-      `razorpay fee`         = fee,
-      `gst on fee`           = tax,
-      `net amount received`  = net_amount,
+      `razorpay fee`         = fee,        # includes GST
+      `gst on fee`           = tax,         # informational
+      `net amount received`  = net_amount,  # gross - fee
+      
       `total payment amount` = gross_amount,
+      
       created_via            = "webhook",
       posting_status         = "review",
       settlement_id          = ""
