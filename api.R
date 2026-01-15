@@ -87,9 +87,6 @@ fm_payment_exists <- function(token, payment_id) {
   status_code(res) == 200
 }
 
-base::message("📦 Record payload:")
-print(record)
-
 fm_insert <- function(record) {
   token <- fm_login()
   res <- POST(
@@ -240,18 +237,20 @@ function(req, res) {
       email                  = safe_get(payment, c("email")),
       phone                  = as.character(safe_get(payment, c("contact"))),
       
-      # amounts
-      `gross amount`         = gross_amount,
-      `razorpay fee`         = fee,        # includes GST
-      `gst on fee`           = tax,         # informational
-      `net amount received`  = net_amount,  # gross - fee
-      
-      `total payment amount` = gross_amount,
+      `gross amount`         = as.numeric(gross_amount),
+      `razorpay fee`         = as.numeric(fee),
+      `gst on fee`           = as.numeric(tax),
+      `net amount received`  = as.numeric(net_amount),
+      `total payment amount` = as.numeric(gross_amount),
       
       created_via            = "webhook",
       posting_status         = "review",
       settlement_id          = ""
     )
+    
+    # 🔍 DEBUG — safe
+    message("📦 Record payload:")
+    str(record)
     
     fm_insert(record)
     message("✅ Payment inserted: ", payment_id)
