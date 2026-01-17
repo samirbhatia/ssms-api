@@ -1,0 +1,15 @@
+name: Keep Render API Alive
+
+on:
+  schedule:
+    # Every 5 minutes (UTC)
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -fsS https://ssms-api-en6d.onrender.com/health || exit 1
