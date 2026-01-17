@@ -3,7 +3,7 @@ name: Keep Render API Alive
 on:
   schedule:
     # Every 5 minutes (UTC)
-    - cron: "*/5 * * * *"
+    - cron: "*/5 1-18 * * *"
   workflow_dispatch:
 
 jobs:
